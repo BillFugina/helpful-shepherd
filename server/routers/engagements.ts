@@ -25,9 +25,6 @@ async function engagementOrThrow(db: Db, id: string) {
   return row
 }
 
-/** Person fields shown with an engagement: who they are and how to reach them. */
-const PERSON_SUMMARY = ['id', 'legalName', 'preferredName', 'email', 'cell', 'homeAirport'] as const
-
 export const engagementsRouter = router({
   get: staffProcedure.input(z.object({ id: z.uuid() })).query(async ({ ctx, input }) => {
     requireView(ctx.grants, 'general')
@@ -46,10 +43,17 @@ export const engagementsRouter = router({
       .from(conflict)
       .where(eq(conflict.engagementId, row.engagement.id))
       .orderBy(asc(conflict.startsOn))
-    const fullPerson = filterRecord(toPersonRecord(row.person), PERSON_FIELDS, ctx.grants)
-    const personSummary = Object.fromEntries(
-      PERSON_SUMMARY.filter((k) => k in fullPerson).map((k) => [k, fullPerson[k]]),
-    ) as Partial<Pick<typeof fullPerson, (typeof PERSON_SUMMARY)[number]>> & { id: string }
+    // Who they are and how to reach them, after the role's filter. A field the
+    // role can't see comes through as undefined.
+    const visiblePerson = filterRecord(toPersonRecord(row.person), PERSON_FIELDS, ctx.grants)
+    const personSummary = {
+      id: visiblePerson.id,
+      legalName: visiblePerson.legalName,
+      preferredName: visiblePerson.preferredName,
+      email: visiblePerson.email,
+      cell: visiblePerson.cell,
+      homeAirport: visiblePerson.homeAirport,
+    }
     const seesContact = levelAtLeast(levelFor(ctx.grants, 'contact'), 'view')
     return {
       engagement: filterRecord(engagementRecord(row.engagement), ENGAGEMENT_FIELDS, ctx.grants),
