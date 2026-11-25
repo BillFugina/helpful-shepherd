@@ -2,8 +2,12 @@ import { loadAccess } from '../access.js'
 import { checkHealth } from '../health.js'
 import { publicProcedure, router } from '../trpc.js'
 import { accessRouter } from './access.js'
+import { agentsRouter } from './agents.js'
 import { auditRouter } from './audit.js'
+import { engagementsRouter } from './engagements.js'
+import { importRouter } from './import.js'
 import { peopleRouter } from './people.js'
+import { productionsRouter, seasonsRouter } from './seasons.js'
 
 export const appRouter = router({
   health: publicProcedure.query(checkHealth),
@@ -15,6 +19,11 @@ export const appRouter = router({
     return { ...ctx.user, role: access?.role ?? null, grants: access?.grants ?? {} }
   }),
   people: peopleRouter,
+  seasons: seasonsRouter,
+  productions: productionsRouter,
+  agents: agentsRouter,
+  engagements: engagementsRouter,
+  import: importRouter,
   access: accessRouter,
   audit: auditRouter,
 })

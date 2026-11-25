@@ -33,7 +33,28 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   environment variable.
 - **Fake seed data** and an installable web app shell (manifest and icon).
 
-Seasons, productions, agents and engagements come next, in the roster slice.
+## What's here (roster)
+
+- **Seasons and productions**, with rehearsal, tech, opening and closing dates
+  (the database refuses dates out of order).
+- **People and engagements.** A person is one record reused every season; an
+  engagement is their deal on one production: role, contract type (Equity
+  ITC, SDC, non-union), pay, agent and commission, weekly stipend, travel, car
+  and housing, preferred arrival and departure, comps, notes and conflicts.
+  A person can be on a production once.
+- **Season dashboard.** Every production and its people, with each person's
+  pipeline stage (Offer accepted through Departed), changeable in place.
+- **Fast-entry form**, laid out in the order of the acceptance email. Search
+  for a returning person and their profile and last agent fill in. One save
+  writes the person, agent, deal and conflicts together, or none of it.
+- **Agents**, with their agency and contact details.
+- **Spreadsheet import.** Load a CSV export of the personnel sheet, say which
+  column is which, preview, then import. Returning people match by email, or by
+  name when there's no email. Nothing is saved while any row has a problem.
+  `samples/personnel-demo.csv` is a made-up sheet to try it with.
+- Every change goes through the field-group permissions (writing a field needs
+  edit on its group) and lands in the audit log, one event per group touched,
+  with field names and never values.
 
 ## Local setup
 
@@ -41,7 +62,7 @@ Seasons, productions, agents and engagements come next, in the roster slice.
 npm install
 cp .env.example .env   # fill in DATABASE_URL, BETTER_AUTH_SECRET, FIELD_ENCRYPTION_KEY
 npm run db:migrate
-npm run db:seed        # prints the demo password if SEED_DEMO_PASSWORD isn't set
+npm run db:seed        # demo logins and a made-up 2027 season; prints the password if SEED_DEMO_PASSWORD isn't set
 npm run dev            # http://localhost:5173
 ```
 

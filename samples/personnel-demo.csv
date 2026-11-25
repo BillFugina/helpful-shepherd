@@ -1,0 +1,8 @@
+Name,Goes by,Email,Cell,Home airport,Role/Position,Contract,Weekly pay,Commission,Stipend,Agent,Agency,Travel,Housing,Rental car,Arrival,Departure,Status,Notes
+Juniper Ashcombe,June,juniper.ashcombe@example.com,919-555-0151,BOS,Swing,Equity ITC,"$1,150.00",10%,$250,Lena Brightwater,Example Talent Group,Yes,Yes,No,2027-01-31,2027-03-15,Contract sent,Demo row
+Bartholomew Finch,Bart,bart.finch@example.com,919-555-0152,ORD,Lighting designer,SDC,"$2,400",,$300,,,Yes,Yes,Yes,2/7/2027,3/1/2027,Offer accepted,
+Odessa Marchetti,,odessa.marchetti@example.com,919-555-0153,RDU,Ensemble,Non-union,650,,0,,,No,No,No,,,Offer accepted,Local hire
+Caspian Rourke,,caspian.rourke@example.com,919-555-0154,JFK,Understudy,Equity ITC,1100,10,200,Lena Brightwater,Example Talent Group,yes,yes,no,1/31/27,3/15/27,Contract signed,
+Wilhelmina Tate,Billie,wilhelmina.tate@example.com,919-555-0155,LAX,Choreographer,SDC,2200,5,275,Marcus Ellery-Stone,Sample Artists Agency,Y,Y,N,2027-01-24,2027-02-20,Offer accepted,
+Avery Castellano,Avery,avery.castellano@example.com,,,Swing,Equity ITC,1150,,250,,,Yes,Yes,No,,,Offer accepted,Returning person: matched by email
+,,no.name@example.com,,,Ensemble,Non-union,600,,,,,,,,,,,Missing name on purpose: shows a problem row

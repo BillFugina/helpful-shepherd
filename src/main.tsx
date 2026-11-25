@@ -7,10 +7,17 @@ import superjson from 'superjson'
 import type { AppRouter } from '../server/routers/index.js'
 import { TRPCProvider } from './lib/trpc'
 import { AccessPage } from './pages/AccessPage'
+import { AgentsPage } from './pages/AgentsPage'
 import { AuditPage } from './pages/AuditPage'
+import { EngagementPage } from './pages/EngagementPage'
+import { FastEntryPage } from './pages/FastEntryPage'
 import { HomePage } from './pages/HomePage'
+import { ImportPage } from './pages/ImportPage'
 import { Layout } from './pages/Layout'
 import { PeoplePage } from './pages/PeoplePage'
+import { PersonPage } from './pages/PersonPage'
+import { SeasonPage } from './pages/SeasonPage'
+import { SeasonsPage } from './pages/SeasonsPage'
 import { SetupTwoFactorPage } from './pages/SetupTwoFactorPage'
 import { SignInPage } from './pages/SignInPage'
 import { RequireStaff } from './pages/RequireStaff'
@@ -26,7 +33,14 @@ const router = createBrowserRouter([
       {
         element: <RequireStaff />,
         children: [
+          { path: '/seasons', element: <SeasonsPage /> },
+          { path: '/seasons/:seasonId', element: <SeasonPage /> },
+          { path: '/productions/:productionId/add', element: <FastEntryPage /> },
+          { path: '/productions/:productionId/import', element: <ImportPage /> },
+          { path: '/engagements/:engagementId', element: <EngagementPage /> },
           { path: '/people', element: <PeoplePage /> },
+          { path: '/people/:personId', element: <PersonPage /> },
+          { path: '/agents', element: <AgentsPage /> },
           { path: '/admin/access', element: <AccessPage /> },
           { path: '/admin/audit', element: <AuditPage /> },
         ],
