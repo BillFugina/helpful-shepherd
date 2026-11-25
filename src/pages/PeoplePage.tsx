@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { isMasked, type MaskedValue } from '../../shared/access'
 import type { RevealablePersonField } from '../../shared/schemas'
 import { errorText } from '../lib/errors'
@@ -16,9 +17,9 @@ const COLUMNS: { key: string; label: string }[] = [
 ]
 
 /**
- * A plain list to show the permission filter at work: columns the role can't
- * see aren't sent at all, and masked values open only through Reveal, which is
- * logged. The roster slice replaces this with the real people screens.
+ * Everyone in the app. Columns the role can't see aren't sent at all, and
+ * masked values open only through Reveal, which is logged. A name opens the
+ * person's profile and productions.
  */
 export function PeoplePage() {
   const trpc = useTRPC()
@@ -63,6 +64,7 @@ export function PeoplePage() {
 }
 
 function Cell({ personId, field, value }: { personId: string; field: string; value: unknown }) {
+  if (field === 'legalName' && typeof value === 'string') return <Link to={`/people/${personId}`}>{value}</Link>
   if (isMasked(value)) return <MaskedCell personId={personId} field={field as RevealablePersonField} value={value} />
   if (value === null || value === undefined || value === '') return <span className="muted">–</span>
   return <>{String(value)}</>

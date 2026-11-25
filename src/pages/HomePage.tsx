@@ -21,7 +21,7 @@ export function HomePage() {
             Signed in as {me.data.name}
             {me.data.role ? `, ${ROLE_LABELS[me.data.role]}` : ', with no role yet'}.
           </p>
-          {me.data.role ? <Link to="/people">Open the people list</Link> : null}
+          {me.data.role ? <Link to="/seasons">Open the seasons</Link> : null}
         </div>
       ) : (
         <p>

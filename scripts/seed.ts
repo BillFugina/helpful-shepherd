@@ -1,6 +1,7 @@
 /**
- * Seeds a demo database: the default grants, two demo staff logins and a set of
- * clearly fake people. Safe to run again; it replaces only demo rows.
+ * Seeds a demo database: the default grants, two demo staff logins and a
+ * clearly fake roster (people, agents, a season, productions, engagements).
+ * Safe to run again; it replaces only demo rows.
  *
  *   npm run db:seed
  *
@@ -10,7 +11,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { createDb } from '../server/db/client.js'
-import { ensureDefaultGrants, reseedDemoPeople, upsertStaff } from '../server/seed.js'
+import { ensureDefaultGrants, reseedDemo, upsertStaff } from '../server/seed.js'
 
 const url = process.env.DATABASE_URL
 if (!url) {
@@ -44,7 +45,10 @@ console.info(`[seed] default grants: ${grants.length ? grants.join(', ') : 'alre
 for (const s of staff) {
   console.info(`[seed] ${s.role}: ${s.email} (${await upsertStaff(db, s, password)})`)
 }
-console.info(`[seed] demo people: ${await reseedDemoPeople(db)}`)
+const counts = await reseedDemo(db)
+console.info(
+  `[seed] demo roster: ${counts.people} people, ${counts.agents} agents, ${counts.productions} productions, ${counts.engagements} engagements, ${counts.conflicts} conflicts`,
+)
 if (generated) {
   console.info(`[seed] demo password (shown once, not stored anywhere): ${password}`)
 }

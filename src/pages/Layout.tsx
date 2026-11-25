@@ -25,7 +25,9 @@ export function Layout() {
         <nav>
           {staff ? (
             <>
+              <NavLink to="/seasons">Seasons</NavLink>
               <NavLink to="/people">People</NavLink>
+              <NavLink to="/agents">Agents</NavLink>
               {me.data?.role === ADMIN_ROLE ? (
                 <>
                   <NavLink to="/admin/access">Access</NavLink>

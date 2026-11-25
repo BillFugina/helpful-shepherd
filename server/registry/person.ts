@@ -1,4 +1,5 @@
 import type { MaskedPersonField, PersonField } from '../../shared/access.js'
+import { encryptOptional, fieldKey } from '../crypto/fields.js'
 import type { person } from '../db/schema.js'
 
 type PersonRow = typeof person.$inferSelect
@@ -19,6 +20,7 @@ export const PERSON_STORAGE = {
   email: { column: 'email' },
   cell: { column: 'cell' },
   homeAirport: { column: 'homeAirport' },
+  airportPrefs: { column: 'airportPrefs' },
   dob: { column: 'dobEnc', aad: 'person.dob' },
   tsaKtn: { column: 'tsaKtnEnc', aad: 'person.tsa_ktn' },
   frequentFlyer: { column: 'frequentFlyerEnc', aad: 'person.frequent_flyer' },
@@ -46,4 +48,25 @@ export function toPersonRecord(row: PersonRow): PersonRecord {
   const out: Record<string, unknown> = {}
   for (const [field, spec] of Object.entries(PERSON_STORAGE)) out[field] = row[spec.column]
   return out as PersonRecord
+}
+
+type PersonInsert = typeof person.$inferInsert
+
+/** A form's person fields, plaintext. Masked ones are encrypted on the way in. */
+export type PersonInput = Partial<Record<Exclude<PersonField, 'id'>, string | null>>
+
+/**
+ * Turns form fields into column values, encrypting masked fields with their
+ * column's AAD. Fields left undefined are left out, so an update touches only
+ * what the form sent.
+ */
+export function personColumns(input: PersonInput, key: Buffer = fieldKey()): Partial<PersonInsert> {
+  const out: Record<string, unknown> = {}
+  for (const [field, value] of Object.entries(input)) {
+    if (value === undefined) continue
+    const spec = (PERSON_STORAGE as Record<string, { column: PersonColumn; aad?: string }>)[field]
+    if (!spec || spec.column === 'id') continue
+    out[spec.column] = spec.aad ? encryptOptional(value, spec.aad, key) : value
+  }
+  return out as Partial<PersonInsert>
 }
