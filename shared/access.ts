@@ -62,7 +62,9 @@ export function levelAtLeast(have: AccessLevel, need: AccessLevel): boolean {
 }
 
 /** Values in these groups show as dots until someone with a grant taps Reveal. */
-export const MASKED_GROUPS: ReadonlySet<FieldGroup> = new Set(['personal_id', 'travel_id', 'tax_bank'])
+export const MASKED_GROUP_LIST = ['personal_id', 'travel_id', 'tax_bank'] as const satisfies readonly FieldGroup[]
+export type MaskedGroup = (typeof MASKED_GROUP_LIST)[number]
+export const MASKED_GROUPS: ReadonlySet<FieldGroup> = new Set(MASKED_GROUP_LIST)
 
 /** Granting any level above 'none' on these needs an explicit second confirmation. */
 export const CONFIRM_TO_GRANT: ReadonlySet<FieldGroup> = new Set(['travel_id', 'tax_bank'])
@@ -127,25 +129,39 @@ export const PERSON_FIELDS = {
 
 export type PersonField = keyof typeof PERSON_FIELDS
 
+/** Person fields in a masked group: the ones whose values only come back through Reveal. */
+export type MaskedPersonField = {
+  [K in PersonField]: (typeof PERSON_FIELDS)[K] extends MaskedGroup ? K : never
+}[PersonField]
+
 /** What a masked field looks like on the wire: present, but no value. */
 export interface MaskedValue {
   masked: true
   hasValue: boolean
 }
 
-export type Filtered<T> = { [K in keyof T]?: T[K] | MaskedValue }
+/**
+ * What filterRecord returns: the id fields always; every other registered field
+ * only if the grants allow it (so optional), as a MaskedValue for masked groups.
+ * Fields missing from the registry never appear.
+ */
+export type FilteredRecord<T, F extends FieldMap> = {
+  [K in keyof T & keyof F as F[K] extends 'id' ? K : never]: T[K]
+} & {
+  [K in keyof T & keyof F as F[K] extends 'id' ? never : K]?: F[K] extends MaskedGroup ? MaskedValue : T[K]
+}
 
 /**
  * Drops every field the grants don't allow and masks the masked groups.
  * Runs on the server for every record it returns, lists and searches included.
  */
-export function filterRecord<T extends Record<string, unknown>>(
+export function filterRecord<T extends Record<string, unknown>, F extends FieldMap>(
   record: T,
-  fields: FieldMap,
+  fields: F,
   grants: Grants,
-): Filtered<T> {
-  const out: Filtered<T> = {}
-  for (const key of Object.keys(record) as (keyof T & string)[]) {
+): FilteredRecord<T, F> {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(record)) {
     const group = fields[key]
     if (group === undefined) continue
     if (group === 'id') {
@@ -161,7 +177,7 @@ export function filterRecord<T extends Record<string, unknown>>(
       out[key] = record[key]
     }
   }
-  return out
+  return out as FilteredRecord<T, F>
 }
 
 export function isMasked(value: unknown): value is MaskedValue {

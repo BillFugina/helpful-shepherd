@@ -1,9 +1,15 @@
 import { z } from 'zod'
-import { ACCESS_LEVELS, FIELD_GROUPS, ROLES } from './access.js'
+import { ACCESS_LEVELS, FIELD_GROUPS, ROLES, type MaskedPersonField } from './access.js'
 
 /** Person fields whose values only come back through Reveal. */
 export const REVEALABLE_PERSON_FIELDS = ['dob', 'tsaKtn', 'frequentFlyer'] as const
 export type RevealablePersonField = (typeof REVEALABLE_PERSON_FIELDS)[number]
+
+// Compile-time check: this list is exactly the person fields in a masked group,
+// so adding a masked field to PERSON_FIELDS without listing it here fails the build.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+const revealableMatchesMasked: Same<RevealablePersonField, MaskedPersonField> = true
+void revealableMatchesMasked
 
 export const revealPersonFieldInput = z.object({
   personId: z.uuid(),

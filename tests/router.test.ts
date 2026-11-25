@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { eq, inArray, sql } from 'drizzle-orm'
+import { asc, eq, inArray, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encryptField, fieldKey } from '../server/crypto/fields.js'
 import { createDb, type Db } from '../server/db/client.js'
@@ -154,6 +154,29 @@ describe.skipIf(!url)('against Postgres', () => {
       { role: 'finance_manager', from: 'none', to: 'view', confirmed: true },
       { role: 'finance_manager', from: 'view', to: 'none', confirmed: false },
     ])
+  })
+
+  it('concurrent grant changes are serialized, so the log records each real previous value', async () => {
+    const asCm = createCaller({ db, user: cm })
+    const base = { role: 'finance_manager', fieldGroup: 'travel_logistics' } as const
+    const levels = ['view', 'review', 'edit', 'none'] as const
+    try {
+      await Promise.all(
+        Array.from({ length: 16 }, (_, i) => asCm.access.setGrant({ ...base, level: levels[i % 4] ?? 'none' })),
+      )
+      const events = await db
+        .select()
+        .from(auditEvent)
+        .where(sql`${auditEvent.actorId} = ${cm.id} and ${auditEvent.recordId} = 'finance_manager:travel_logistics'`)
+        .orderBy(asc(auditEvent.at))
+      const steps = events.map((e) => e.detail as { from: string; to: string })
+      expect(steps.length).toBeGreaterThan(0)
+      expect(steps[0]?.from).toBe('none')
+      for (let i = 1; i < steps.length; i++) expect(steps[i]?.from).toBe(steps[i - 1]?.to)
+      expect((await asCm.access.matrix()).finance_manager.travel_logistics ?? 'none').toBe(steps.at(-1)?.to)
+    } finally {
+      await asCm.access.setGrant({ ...base, level: 'none' })
+    }
   })
 
   it("can't change the Company Manager's own grants", async () => {

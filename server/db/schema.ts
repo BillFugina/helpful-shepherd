@@ -148,7 +148,11 @@ export const auditEvent = pgTable(
   'audit_event',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    // The moment of the insert, not the start of its transaction, so events
+    // written inside a serialized transaction sort in the order they happened.
+    at: timestamp('at', { withTimezone: true })
+      .notNull()
+      .default(sql`clock_timestamp()`),
     // Not a foreign key: the log must outlive a deleted user.
     actorId: text('actor_id'),
     actorEmail: text('actor_email'),

@@ -1,7 +1,7 @@
 import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
 import { ZodError } from 'zod'
-import { ADMIN_ROLE, type Grants, type Role } from '../shared/access.js'
+import { ADMIN_ROLE } from '../shared/access.js'
 import { loadAccess } from './access.js'
 import type { Db } from './db/client.js'
 
@@ -56,7 +56,7 @@ export const staffProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   }
   const access = await loadAccess(ctx.db, ctx.user.id)
   if (!access) throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.noRole })
-  return next({ ctx: { ...ctx, role: access.role as Role, grants: access.grants as Grants } })
+  return next({ ctx: { ...ctx, role: access.role, grants: access.grants } })
 })
 
 export const adminProcedure = staffProcedure.use(({ ctx, next }) => {

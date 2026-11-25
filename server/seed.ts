@@ -5,6 +5,7 @@ import { DEFAULT_GRANTS, ROLES, type Role } from '../shared/access.js'
 import { encryptOptional } from './crypto/fields.js'
 import type { Db } from './db/client.js'
 import { account, person, roleGrant, user, userRole } from './db/schema.js'
+import { PERSON_STORAGE } from './registry/person.js'
 
 /**
  * Gives each role the plan's default grants, but only a role that has none
@@ -89,9 +90,9 @@ export async function reseedDemoPeople(db: Db, key?: Buffer): Promise<number> {
       email: `${slug}@example.com`,
       cell: `919-555-01${n}`,
       homeAirport: p.homeAirport,
-      dobEnc: encryptOptional(p.dob, 'person.dob', key),
-      tsaKtnEnc: encryptOptional(p.tsaKtn, 'person.tsa_ktn', key),
-      frequentFlyerEnc: encryptOptional(i % 3 === 0 ? `DEMO-FF-${n}` : null, 'person.frequent_flyer', key),
+      dobEnc: encryptOptional(p.dob, PERSON_STORAGE.dob.aad, key),
+      tsaKtnEnc: encryptOptional(p.tsaKtn, PERSON_STORAGE.tsaKtn.aad, key),
+      frequentFlyerEnc: encryptOptional(i % 3 === 0 ? `DEMO-FF-${n}` : null, PERSON_STORAGE.frequentFlyer.aad, key),
       isDemo: true,
     }
   })
