@@ -664,6 +664,8 @@ export const documentsRouter = router({
       if (!OPEN_FOR_UPLOAD.has(doc.status)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'That form is already with Finance or done.' })
       }
+      // Deleting a held file is a file action, so it needs the same grant as Remove file.
+      if (await hasFile(tx, doc.id)) requireEdit(ctx.grants, ['documents', 'tax_bank'])
       await purgeFile(tx, doc.id, eng.personId, 'not_needed', { user: ctx.user })
       await tx
         .update(document)

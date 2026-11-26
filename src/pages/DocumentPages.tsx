@@ -244,7 +244,7 @@ export function EngagementDocuments({ engagementId }: { engagementId: string }) 
                               onFlag={(note) => void run(() => flag.mutateAsync({ ...ref, note }))}
                             />
                           ) : null}
-                          {edit && OPEN_FOR_UPLOAD.has(item.status) ? (
+                          {edit && OPEN_FOR_UPLOAD.has(item.status) && (files || !item.hasFile) ? (
                             <button
                               type="button"
                               className="link"

@@ -11,6 +11,7 @@ import {
   engagement,
   person,
   production,
+  roleGrant,
   season,
   uploadLink,
   user,
@@ -283,6 +284,26 @@ describe.skipIf(!url)('documents against Postgres', () => {
     expect(doc!.filePurgedAt).not.toBeNull()
     expect(await db.select().from(documentFile).where(eq(documentFile.documentId, doc!.id))).toHaveLength(0)
     await expect(asCm().documents.download(ref)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('marking a form Not needed deletes its file only for a role that can manage files', async () => {
+    const ref = { engagementId: actorId, documentType: 'direct_deposit' as const }
+    await asCm().documents.upload({ ...ref, fileName: 'deposit.pdf', base64: b64(pdf) })
+    const where = and(eq(roleGrant.role, 'finance_manager'), eq(roleGrant.fieldGroup, 'documents'))
+    const [before] = await db.select({ level: roleGrant.level }).from(roleGrant).where(where)
+    await db.update(roleGrant).set({ level: 'edit' }).where(where)
+    try {
+      await expect(asFinance().documents.markNotNeeded(ref)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    } finally {
+      await db.update(roleGrant).set({ level: before!.level }).where(where)
+    }
+    const [doc] = await db
+      .select()
+      .from(document)
+      .where(and(eq(document.engagementId, actorId), eq(document.documentType, 'direct_deposit')))
+    expect(doc!.status).toBe('received')
+    expect(await db.select().from(documentFile).where(eq(documentFile.documentId, doc!.id))).toHaveLength(1)
+    await asCm().documents.removeFile(ref)
   })
 
   it('a signed deal moves to Paperwork complete once every form is done', async () => {
