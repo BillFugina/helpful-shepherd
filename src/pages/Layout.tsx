@@ -9,7 +9,7 @@ export function Layout() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const staff = me.data?.twoFactorEnabled && me.data.role
-  const sees = (group: 'travel_logistics' | 'housing_access') =>
+  const sees = (group: 'travel_logistics' | 'housing_access' | 'contracts') =>
     levelAtLeast(levelFor(me.data?.grants ?? {}, group), 'view')
 
   async function signOut() {
@@ -35,6 +35,7 @@ export function Layout() {
               ) : null}
               {sees('travel_logistics') ? <NavLink to="/arrivals">Arrivals</NavLink> : null}
               {sees('housing_access') ? <NavLink to="/housing">Housing</NavLink> : null}
+              {sees('contracts') ? <NavLink to="/contracts/settings">Contracts</NavLink> : null}
               {me.data?.role === ADMIN_ROLE ? (
                 <>
                   <NavLink to="/admin/access">Access</NavLink>

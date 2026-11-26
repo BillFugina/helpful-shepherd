@@ -106,6 +106,8 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   housing_assignment_room_id_housing_room_id_fk: 'Someone is assigned to this room. Move them first.',
   housing_assignment_room_no_overlap: 'Someone else has that room for some of those nights.',
   housing_assignment_engagement_no_overlap: 'This person already has a room for some of those nights.',
+  contract_engagement_family_live_uq: 'This engagement already has that contract. Void it first to start over.',
+  contract_template_template_id_contract_template_id_fk: 'Contracts were made from this template. Retire it instead.',
   flight_departs_before_arriving: 'The flight has to land after it takes off. Check both times and time zones.',
 }
 

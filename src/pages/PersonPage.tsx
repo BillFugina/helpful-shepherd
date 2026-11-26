@@ -1,7 +1,7 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
-import { isMasked, type MaskedPersonField } from '../../shared/access'
+import { isMasked, PERSON_FIELDS, type MaskedPersonField } from '../../shared/access'
 import { CONTRACT_TYPE_LABELS, PIPELINE_LABELS } from '../../shared/roster'
 import { required } from '../components/TermsFields'
 import { errorText } from '../lib/errors'
@@ -13,6 +13,8 @@ type PersonDetail = Outputs['people']['get']
 
 const MASKED: { key: MaskedPersonField; label: string; type?: 'date' }[] = [
   { key: 'dob', label: 'Date of birth', type: 'date' },
+  { key: 'homeStreet', label: 'Home street address (for contracts)' },
+  { key: 'homeCityStateZip', label: 'Home city, state, ZIP' },
   { key: 'tsaKtn', label: 'TSA PreCheck / Known Traveler number' },
   { key: 'frequentFlyer', label: 'Frequent flyer number' },
 ]
@@ -93,17 +95,20 @@ function Profile({ detail: d }: { detail: PersonDetail }) {
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
   const editGeneral = can('general', 'edit')
   const editContact = can('contact', 'edit')
-  const editableMasked = MASKED.filter((m) => can(m.key === 'dob' ? 'personal_id' : 'travel_id', 'edit'))
+  const editableMasked = MASKED.filter((m) => can(PERSON_FIELDS[m.key], 'edit'))
 
   const form = useForm({
     defaultValues: {
       legalName: str(p.legalName),
       preferredName: str(p.preferredName),
+      unionMemberId: str(p.unionMemberId),
       email: str(p.email),
       cell: str(p.cell),
       homeAirport: str(p.homeAirport),
       airportPrefs: str(p.airportPrefs),
       dob: '',
+      homeStreet: '',
+      homeCityStateZip: '',
       tsaKtn: '',
       frequentFlyer: '',
     },
@@ -114,7 +119,13 @@ function Profile({ detail: d }: { detail: PersonDetail }) {
       )
       await update.mutateAsync({
         id: d.person.id,
-        ...(editGeneral ? { legalName: value.legalName.trim(), preferredName: orNull(value.preferredName) } : {}),
+        ...(editGeneral
+          ? {
+              legalName: value.legalName.trim(),
+              preferredName: orNull(value.preferredName),
+              unionMemberId: orNull(value.unionMemberId),
+            }
+          : {}),
         ...(editContact
           ? {
               email: orNull(value.email),
@@ -125,7 +136,7 @@ function Profile({ detail: d }: { detail: PersonDetail }) {
           : {}),
         ...masked,
       })
-      formApi.reset({ ...value, dob: '', tsaKtn: '', frequentFlyer: '' })
+      formApi.reset({ ...value, dob: '', homeStreet: '', homeCityStateZip: '', tsaKtn: '', frequentFlyer: '' })
       await queryClient.invalidateQueries({ queryKey: trpc.people.get.queryKey({ id: d.person.id }) })
       await queryClient.invalidateQueries({ queryKey: trpc.people.list.queryKey() })
     },
@@ -150,6 +161,16 @@ function Profile({ detail: d }: { detail: PersonDetail }) {
             </form.Field>
             <form.Field name="preferredName">
               {(f) => <TextInput field={f} label="Preferred name" readOnly={!editGeneral} />}
+            </form.Field>
+            <form.Field name="unionMemberId">
+              {(f) => (
+                <TextInput
+                  field={f}
+                  label="Equity or SDC member ID"
+                  hint="Printed on union contracts."
+                  readOnly={!editGeneral}
+                />
+              )}
             </form.Field>
           </>
         ) : null}

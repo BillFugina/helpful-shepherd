@@ -9,9 +9,10 @@ import {
   PROGRAM_LABELS,
   type PipelineStatus,
 } from '../../shared/roster'
+import { parseMoney } from '../../shared/import'
 import { required } from '../components/TermsFields'
 import { errorText } from '../lib/errors'
-import { displayName, formatDate, TextArea, TextInput, useCan } from '../lib/fields'
+import { displayName, formatDate, moneyValidator, TextArea, TextInput, useCan } from '../lib/fields'
 import { useTRPC } from '../lib/trpc'
 import type { Outputs } from '../lib/types'
 
@@ -83,9 +84,20 @@ function ProductionCard({ seasonId, production: p }: { seasonId: string; product
             <Link className="button secondary" to={`/productions/${p.id}/import`}>
               Import
             </Link>
+            {can('contracts', 'view') ? (
+              <Link className="button secondary" to={`/productions/${p.id}/contracts`}>
+                Contracts
+              </Link>
+            ) : null}
             <button type="button" className="link" onClick={() => setEditing(!editing)}>
-              {editing ? 'Close' : 'Edit dates'}
+              {editing ? 'Close' : 'Edit details'}
             </button>
+          </div>
+        ) : can('contracts', 'view') ? (
+          <div className="actions">
+            <Link className="button secondary" to={`/productions/${p.id}/contracts`}>
+              Contracts
+            </Link>
           </div>
         ) : null}
       </header>
@@ -183,6 +195,9 @@ export function StatusCell({
   )
 }
 
+const wholeNumber = ({ value }: { value: string }) =>
+  !value.trim() || /^[1-9]\d*$/.test(value.trim()) ? undefined : 'Enter a whole number'
+
 function ProductionForm({
   seasonId,
   production,
@@ -198,6 +213,8 @@ function ProductionForm({
   const update = useMutation(trpc.productions.update.mutationOptions())
   const blank = (v: string | null | undefined) => v ?? ''
   const orNull = (v: string) => (v.trim() ? v : null)
+  const num = (v: number | null | undefined) => (v == null ? '' : String(v))
+  const intOrNull = (v: string) => (v.trim() ? Number(v) : null)
   const form = useForm({
     defaultValues: {
       title: blank(production?.title),
@@ -206,6 +223,12 @@ function ProductionForm({
       opening: blank(production?.opening),
       closing: blank(production?.closing),
       performanceSchedule: blank(production?.performanceSchedule),
+      venueName: blank(production?.venueName),
+      venueCapacity: num(production?.venueCapacity),
+      topTicket: production?.topTicketCents == null ? '' : String(production.topTicketCents / 100),
+      scheduledPerformances: num(production?.scheduledPerformances),
+      rehearsalLocation: blank(production?.rehearsalLocation),
+      rehearsalCallTime: blank(production?.rehearsalCallTime),
     },
     onSubmit: async ({ value }) => {
       const fields = {
@@ -215,6 +238,12 @@ function ProductionForm({
         opening: orNull(value.opening),
         closing: orNull(value.closing),
         performanceSchedule: orNull(value.performanceSchedule),
+        venueName: orNull(value.venueName),
+        venueCapacity: intOrNull(value.venueCapacity),
+        topTicketCents: value.topTicket.trim() ? (parseMoney(value.topTicket) ?? null) : null,
+        scheduledPerformances: intOrNull(value.scheduledPerformances),
+        rehearsalLocation: orNull(value.rehearsalLocation),
+        rehearsalCallTime: orNull(value.rehearsalCallTime),
       }
       if (production) await update.mutateAsync({ id: production.id, ...fields })
       else await create.mutateAsync({ seasonId, ...fields })
@@ -245,9 +274,28 @@ function ProductionForm({
         <form.Field name="closing">{(f) => <TextInput field={f} type="date" label="Closing" />}</form.Field>
         <form.Field name="performanceSchedule">{(f) => <TextArea field={f} label="Performance schedule" />}</form.Field>
       </div>
+      <h3>For the contracts</h3>
+      <div className="grid">
+        <form.Field name="venueName">{(f) => <TextInput field={f} label="Venue" />}</form.Field>
+        <form.Field name="venueCapacity" validators={{ onChange: wholeNumber }}>
+          {(f) => <TextInput field={f} label="Seats" inputMode="numeric" />}
+        </form.Field>
+        <form.Field name="topTicket" validators={{ onChange: moneyValidator }}>
+          {(f) => <TextInput field={f} label="Top ticket price ($)" inputMode="decimal" />}
+        </form.Field>
+        <form.Field name="scheduledPerformances" validators={{ onChange: wholeNumber }}>
+          {(f) => <TextInput field={f} label="Scheduled performances" inputMode="numeric" />}
+        </form.Field>
+        <form.Field name="rehearsalLocation">
+          {(f) => <TextInput field={f} label="First rehearsal location" />}
+        </form.Field>
+        <form.Field name="rehearsalCallTime">
+          {(f) => <TextInput field={f} label="First call time" placeholder="e.g. 10:00 AM" />}
+        </form.Field>
+      </div>
       <div className="actions">
         <button type="submit" disabled={busy}>
-          {busy ? 'Saving…' : production ? 'Save dates' : 'Add production'}
+          {busy ? 'Saving…' : production ? 'Save details' : 'Add production'}
         </button>
         <button type="button" className="secondary" onClick={onDone}>
           Cancel

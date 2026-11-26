@@ -287,7 +287,7 @@ describe.skipIf(!url)('roster against Postgres', () => {
 
   it('the demo seed builds a full season of made-up people', async () => {
     const counts = await reseedDemo(db)
-    expect(counts).toMatchObject({ seasons: 1, productions: 5, engagements: 25 })
+    expect(counts).toMatchObject({ seasons: 1, productions: 5, engagements: 25, contracts: 24 })
     const again = await reseedDemo(db)
     expect(again).toEqual(counts)
     const demo = await db.select({ email: person.email }).from(person).where(eq(person.isDemo, true))

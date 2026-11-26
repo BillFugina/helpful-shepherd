@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   date,
   index,
   integer,
@@ -14,9 +15,11 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 import { ACCESS_LEVELS, AUDIT_ACTIONS, FIELD_GROUPS, ROLES } from '../../shared/access.js'
+import { CONTRACT_STATUSES, TEMPLATE_FORMATS } from '../../shared/contracts.js'
 import { DRAFT_STATUS_LIST } from '../../shared/drafts.js'
 import { CONTRACT_TYPES, PIPELINE_STATUSES, PROGRAMS } from '../../shared/roster.js'
 import {
@@ -384,6 +387,7 @@ export const person = pgTable(
     // General
     legalName: text('legal_name').notNull(),
     preferredName: text('preferred_name'),
+    unionMemberId: text('union_member_id'),
     // Contact
     email: text('email'),
     cell: text('cell'),
@@ -391,6 +395,8 @@ export const person = pgTable(
     airportPrefs: text('airport_prefs'),
     // Personal ID: encrypted in the app before it reaches the database.
     dobEnc: text('dob_enc'),
+    homeStreetEnc: text('home_street_enc'),
+    homeCityStateZipEnc: text('home_city_state_zip_enc'),
     // Travel ID: encrypted in the app before it reaches the database.
     tsaKtnEnc: text('tsa_ktn_enc'),
     frequentFlyerEnc: text('frequent_flyer_enc'),
@@ -440,11 +446,21 @@ export const production = pgTable(
     opening: date('opening', { mode: 'string' }),
     closing: date('closing', { mode: 'string' }),
     performanceSchedule: text('performance_schedule'),
+    venueName: text('venue_name'),
+    venueCapacity: integer('venue_capacity'),
+    topTicketCents: integer('top_ticket_cents'),
+    scheduledPerformances: integer('scheduled_performances'),
+    rehearsalLocation: text('rehearsal_location'),
+    rehearsalCallTime: text('rehearsal_call_time'),
     isDemo: boolean('is_demo').notNull().default(false),
     ...timestamps,
   },
   (t) => [
     index('production_season_id_idx').on(t.seasonId),
+    check(
+      'production_venue_numbers_positive',
+      sql`coalesce(${t.venueCapacity}, 1) > 0 and coalesce(${t.topTicketCents}, 0) >= 0 and coalesce(${t.scheduledPerformances}, 1) > 0`,
+    ),
     // Each date that's set comes on or after the ones before it.
     check(
       'production_rehearsal_before_tech',
@@ -506,6 +522,7 @@ export const engagement = pgTable(
     weeklyPayCents: integer('weekly_pay_cents'),
     commissionPercent: numeric('commission_percent', { precision: 5, scale: 2, mode: 'number' }),
     weeklyStipendCents: integer('weekly_stipend_cents'),
+    feeCents: integer('fee_cents'),
     travelProvided: boolean('travel_provided').notNull().default(false),
     carProvided: boolean('car_provided').notNull().default(false),
     housingProvided: boolean('housing_provided').notNull().default(false),
@@ -524,7 +541,7 @@ export const engagement = pgTable(
     index('engagement_agent_id_idx').on(t.agentId),
     check(
       'engagement_money_not_negative',
-      sql`coalesce(${t.weeklyPayCents}, 0) >= 0 and coalesce(${t.weeklyStipendCents}, 0) >= 0`,
+      sql`coalesce(${t.weeklyPayCents}, 0) >= 0 and coalesce(${t.weeklyStipendCents}, 0) >= 0 and coalesce(${t.feeCents}, 0) >= 0`,
     ),
     check(
       'engagement_commission_range',
@@ -756,4 +773,107 @@ export const demoClock = pgTable(
     ...timestamps,
   },
   (t) => [check('demo_clock_single_row', sql`${t.id}`)],
+)
+
+// ---------------------------------------------------------------------------
+// Contracts. Field groups are in shared/contracts.ts; everything here is in
+// the Contracts group.
+// ---------------------------------------------------------------------------
+
+/** Raw bytes (a blank union form). Both drivers read and write a Buffer. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' })
+
+export const templateFormat = pgEnum('contract_template_format', TEMPLATE_FORMATS)
+export const contractStatus = pgEnum('contract_status', CONTRACT_STATUSES)
+
+/** The theatre's own details, printed on every contract. One row. */
+export const organization = pgTable(
+  'organization',
+  {
+    id: integer('id').primaryKey().default(1),
+    name: text('name'),
+    street: text('street'),
+    cityStateZip: text('city_state_zip'),
+    phone: text('phone'),
+    email: text('email'),
+    signerName: text('signer_name'),
+    ein: text('ein'),
+    unemploymentNumber: text('unemployment_number'),
+    equityEmployerAgreement: text('equity_employer_agreement'),
+    ...timestamps,
+  },
+  (t) => [check('organization_single_row', sql`${t.id} = 1`)],
+)
+
+/**
+ * A contract template. Versions are rows: replacing a template adds a new row
+ * in the same family and retires the old one, so a contract always points at
+ * exactly the form it was made from.
+ */
+export const contractTemplate = pgTable(
+  'contract_template',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // The first version's id, shared by every later version.
+    familyId: uuid('family_id').notNull(),
+    name: text('name').notNull(),
+    format: templateFormat('format').notNull(),
+    contractType: contractType('contract_type').notNull(),
+    version: integer('version').notNull().default(1),
+    // A union form: the blank fillable PDF as uploaded.
+    pdf: bytea('pdf'),
+    fileName: text('file_name'),
+    // A text template: the body, with {{tokens}}.
+    body: text('body'),
+    active: boolean('active').notNull().default(true),
+    createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+    isDemo: boolean('is_demo').notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [
+    unique('contract_template_family_version_uq').on(t.familyId, t.version),
+    check(
+      'contract_template_content_matches_format',
+      sql`(${t.format} = 'text' and ${t.body} is not null and ${t.pdf} is null) or (${t.format} <> 'text' and ${t.pdf} is not null and ${t.body} is null)`,
+    ),
+  ],
+)
+
+/** One contract for one engagement, from one template version. */
+export const contract = pgTable(
+  'contract',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    // Restrict: a template with contracts can be retired, not deleted.
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => contractTemplate.id, { onDelete: 'restrict' }),
+    templateFamilyId: uuid('template_family_id').notNull(),
+    status: contractStatus('status').notNull().default('draft'),
+    // Values the Company Manager typed over what the app filled in.
+    overrides: jsonb('overrides').$type<Record<string, string>>().notNull().default({}),
+    // What went out, frozen when marked sent. Personal ID is never kept here.
+    sentValues: jsonb('sent_values').$type<Record<string, string>>(),
+    sentOn: date('sent_on', { mode: 'string' }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    sentTo: text('sent_to'),
+    signedOn: date('signed_on', { mode: 'string' }),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+    isDemo: boolean('is_demo').notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [
+    index('contract_engagement_id_idx').on(t.engagementId),
+    index('contract_template_id_idx').on(t.templateId),
+    // One live contract per engagement per template; a voided one can be redone.
+    uniqueIndex('contract_engagement_family_live_uq')
+      .on(t.engagementId, t.templateFamilyId)
+      .where(sql`${t.status} <> 'void'`),
+    check('contract_sent_has_date', sql`${t.status} in ('draft', 'void') or ${t.sentOn} is not null`),
+    check('contract_signed_has_date', sql`${t.status} <> 'signed' or ${t.signedOn} is not null`),
+  ],
 )

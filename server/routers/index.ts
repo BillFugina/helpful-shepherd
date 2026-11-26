@@ -6,6 +6,7 @@ import { agentsRouter } from './agents.js'
 import { arrivalsRouter } from './arrivals.js'
 import { auditRouter } from './audit.js'
 import { connectionsRouter } from './connections.js'
+import { contractsRouter } from './contracts.js'
 import { draftsRouter } from './drafts.js'
 import { engagementsRouter } from './engagements.js'
 import { housingRouter } from './housing.js'
@@ -36,6 +37,7 @@ export const appRouter = router({
   audit: auditRouter,
   drafts: draftsRouter,
   connections: connectionsRouter,
+  contracts: contractsRouter,
 })
 
 export type AppRouter = typeof appRouter

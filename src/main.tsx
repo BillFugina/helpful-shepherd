@@ -11,6 +11,7 @@ import { AgentsPage } from './pages/AgentsPage'
 import { ArrivalsPage } from './pages/ArrivalsPage'
 import { AuditPage } from './pages/AuditPage'
 import { ConnectionsPage } from './pages/ConnectionsPage'
+import { ContractPage, ContractSettingsPage, ProductionContractsPage } from './pages/ContractPages'
 import { ConnectPage } from './pages/ConnectPage'
 import { DraftsPage } from './pages/DraftsPage'
 import { EngagementPage } from './pages/EngagementPage'
@@ -46,6 +47,9 @@ const router = createBrowserRouter([
           { path: '/productions/:productionId/import', element: <ImportPage /> },
           { path: '/engagements/:engagementId', element: <EngagementPage /> },
           { path: '/engagements/:engagementId/travel', element: <TravelPage /> },
+          { path: '/productions/:productionId/contracts', element: <ProductionContractsPage /> },
+          { path: '/contracts/settings', element: <ContractSettingsPage /> },
+          { path: '/contracts/:contractId', element: <ContractPage /> },
           { path: '/arrivals', element: <ArrivalsPage /> },
           { path: '/housing', element: <HousingPage /> },
           { path: '/people', element: <PeoplePage /> },

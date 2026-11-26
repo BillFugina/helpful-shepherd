@@ -210,6 +210,42 @@ export const CONNECTOR_TOOLS = {
     },
   }),
 
+  contract_status: define({
+    title: 'Contract status',
+    description:
+      'Where every contract on one production stands: for each person, their contract type and each contract (draft, sent with the date, or signed with the date), plus who has none prepared yet. Read-only; contracts are prepared, sent and marked signed in the app.',
+    input: z.object({ productionId: uuid('production') }),
+    readOnly: true,
+    run: async (args, env) => {
+      const d = await callerFor(env).contracts.byProduction({ productionId: args.productionId })
+      const people = d.engagements.map((e) => ({
+        engagementId: e.id,
+        name: e.preferredName ?? e.legalName ?? null,
+        role: e.role,
+        contractType: e.contractType,
+        contracts: e.contracts.map((c) => ({
+          contractId: c.id,
+          template: c.template.name,
+          status: c.status,
+          sentOn: c.sentOn,
+          signedOn: c.signedOn,
+        })),
+      }))
+      const all = people.flatMap((p) => p.contracts)
+      const data = {
+        production: d.production.title,
+        counts: {
+          notPrepared: people.filter((p) => p.contractType !== 'non_union' && !p.contracts.length).length,
+          draft: all.filter((c) => c.status === 'draft').length,
+          sent: all.filter((c) => c.status === 'sent').length,
+          signed: all.filter((c) => c.status === 'signed').length,
+        },
+        people,
+      }
+      return { data, audit: { recordId: args.productionId, detail: { count: all.length } } }
+    },
+  }),
+
   arrivals_board: define({
     title: 'Arrivals board',
     description:
