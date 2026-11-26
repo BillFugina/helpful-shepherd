@@ -79,8 +79,8 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   double-booked. Housing needs (own bathroom, ground floor) and travel that
   starts before or ends after a stay show as warnings, never blocks.
 - Finance has no travel or housing access by default, matching the plan.
-- Demo data: flights and cars for everyone the theater flies in, three made-up
-  places with seven rooms, stays for each production, and two housing needs
+- Demo data: flights and cars for everyone the theater flies in, made-up places and
+  rooms, stays for each production, and two housing needs
   that trip warnings in the second production. The first travel day is Jan 10,
   2027, with a delay, a gate change and an early landing.
 
@@ -88,6 +88,33 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
 phone push alerts and an "arriving tomorrow" summary. Here the tracker runs
 when someone looks at the board, throttled to once a minute per flight. The
 scheduled job needs an Inngest account and push keys.
+
+## What's here (housing)
+
+- **Who still needs a room**: each person's nights come from their flights
+  (when the role can see travel), else the dates they asked for, else the
+  production's rehearsal start to the day after closing. Anyone whose deal
+  includes housing shows as housed, missing nights (named), no room yet, or
+  no dates to go on. The Housing page lists everyone on an open production who
+  still needs something.
+- **Housing plan** (`/housing/plan`): one production at a time, where each
+  person stays with first night and move-out day, what's missing, and the
+  warnings on their stays. Links straight to assigning a room.
+- **Moving in and out**: the Housing page lists move-ins and move-outs in the
+  four weeks shown, and marks a room that turns over the same day.
+- **Editing**: places and rooms can be edited in place, and a stay can move to
+  another room or other dates from the person's travel page.
+- **Two field groups**: _Housing_ covers place and room names and who stays
+  when; _Housing access_ covers the address, door code, how to get in and
+  notes. A place's name is a label, not its address. Migration 0009 gives
+  every role the same Housing level it already had for Housing access.
+- **Claude connector**: a `housing_plan` tool and a housing block on the
+  person card give place and room names and dates only. Housing access is
+  never sent over the connector, and the guest demo never sees door codes or
+  how to get in.
+- Demo data adds a downtown hotel with two suites, leaves two people on the
+  last production without a room, and starts one stay on the fourth
+  production two nights late.
 
 ## What's here (documents)
 

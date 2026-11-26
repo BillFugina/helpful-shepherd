@@ -3,11 +3,13 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { THEATRE_AIRPORT } from '../../shared/time'
 import {
+  COVERAGE_STATUS_LABELS,
   FLIGHT_DIRECTION_LABELS,
   HOUSING_RULE_LABELS,
   HOUSING_RULES,
   type FlightDirection,
   type HousingRule,
+  nightRangeText,
 } from '../../shared/travel'
 import { errorText } from '../lib/errors'
 import { displayName, formatDate, useCan } from '../lib/fields'
@@ -54,7 +56,7 @@ export function TravelPage() {
       {d.cars ? <Cars itinerary={d} /> : null}
       {d.housing ? <Housing itinerary={d} /> : null}
       <Preferences itinerary={d} />
-      {!can('travel_logistics') && !can('housing_access') ? (
+      {!can('travel_logistics') && !can('housing') ? (
         <p className="muted">Your role can't see travel or housing.</p>
       ) : null}
     </section>
@@ -68,6 +70,8 @@ function useRefresh(engagementId: string) {
     await queryClient.invalidateQueries({ queryKey: trpc.travel.forEngagement.queryKey({ engagementId }) })
     await queryClient.invalidateQueries({ queryKey: trpc.arrivals.board.pathKey() })
     await queryClient.invalidateQueries({ queryKey: trpc.housing.occupancy.pathKey() })
+    await queryClient.invalidateQueries({ queryKey: trpc.housing.needs.queryKey() })
+    await queryClient.invalidateQueries({ queryKey: trpc.housing.plan.pathKey() })
   }
 }
 
@@ -433,14 +437,26 @@ function Housing({ itinerary: d }: { itinerary: Itinerary }) {
   const trpc = useTRPC()
   const can = useCan()
   const refresh = useRefresh(d.engagementId)
-  const edit = can('housing_access', 'edit')
+  const edit = can('housing', 'edit')
   const units = useQuery({ ...trpc.housing.units.queryOptions(), enabled: edit })
+  const housing = d.housing!
+  // Start the form on the first nights they still need.
+  const gap = housing.coverage.missing[0]
   const [roomId, setRoomId] = useState('')
-  const [startsOn, setStartsOn] = useState(d.preferredArrival ?? '')
-  const [endsOn, setEndsOn] = useState(d.preferredDeparture ?? '')
+  const [startsOn, setStartsOn] = useState(gap?.from ?? d.preferredArrival ?? '')
+  const [endsOn, setEndsOn] = useState(gap?.to ?? d.preferredDeparture ?? '')
+  const [editing, setEditing] = useState<string | null>(null)
   const assign = useMutation(trpc.housing.assign.mutationOptions())
   const remove = useMutation(trpc.housing.removeAssignment.mutationOptions())
-  const housing = d.housing!
+  const rooms = (units.data ?? []).map((u) => (
+    <optgroup key={u.id} label={u.name}>
+      {u.rooms.map((r) => (
+        <option key={r.id} value={r.id}>
+          {r.name} (floor {r.floor}, {r.bathroom})
+        </option>
+      ))}
+    </optgroup>
+  ))
 
   async function submit(ev: React.FormEvent) {
     ev.preventDefault()
@@ -452,45 +468,73 @@ function Housing({ itinerary: d }: { itinerary: Itinerary }) {
   return (
     <div className="card wide">
       <h2>Housing</h2>
-      {!housing.stays.length ? (
-        <p className="muted">{d.housingProvided ? 'No room assigned yet.' : 'Housing isn’t part of this deal.'}</p>
+      {housing.need ? (
+        <p className="small">
+          Needs {formatDate(housing.need.from)} to {formatDate(housing.need.to)},{' '}
+          {HOUSING_NEED_TEXT[housing.need.source]}.{' '}
+          <span className={NEEDS_WORK.has(housing.coverage.status) ? 'warning' : 'muted'}>
+            {COVERAGE_STATUS_LABELS[housing.coverage.status]}
+            {housing.coverage.missing.length
+              ? `: the ${housing.coverage.missing.map(nightRangeText).join(' and the ')}`
+              : ''}
+          </span>
+        </p>
       ) : null}
-      {housing.stays.map((s) => (
-        <div className="leg" key={s.id}>
-          <div>
-            <strong>
-              {s.unit.name}, {s.room.name}
-            </strong>
-            <div className="small">
-              {formatDate(s.startsOn)} to {formatDate(s.endsOn)} · floor {s.room.floor} · {s.room.bathroom}
+      {!housing.stays.length ? (
+        <p className="muted">
+          {!d.housingProvided
+            ? 'Housing isn’t part of this deal.'
+            : housing.need
+              ? 'No room assigned yet.'
+              : 'No room assigned yet, and no dates to go on. Add their flights or the dates they asked for.'}
+        </p>
+      ) : null}
+      {housing.stays.map((s) =>
+        editing === s.id ? (
+          <EditStay key={s.id} stay={s} rooms={rooms} onDone={() => setEditing(null)} refresh={refresh} />
+        ) : (
+          <div className="leg" key={s.id}>
+            <div>
+              <strong>
+                {s.unit.name}, {s.room.name}
+              </strong>
+              <div className="small">
+                {formatDate(s.startsOn)} to {formatDate(s.endsOn)} · floor {s.room.floor} · {s.room.bathroom}
+              </div>
+              {s.unit.address ? <div className="small muted">{s.unit.address}</div> : null}
+              {s.unit.doorCode ? <div className="small">Door code {s.unit.doorCode}</div> : null}
+              {housing.warnings
+                .filter((w) => w.assignmentId === s.id)
+                .map((w) => (
+                  <div key={w.kind} className="warning small">
+                    {w.message}
+                  </div>
+                ))}
             </div>
-            {s.unit.address ? <div className="small muted">{s.unit.address}</div> : null}
-            {s.unit.doorCode ? <div className="small">Door code {s.unit.doorCode}</div> : null}
-            {housing.warnings
-              .filter((w) => w.assignmentId === s.id)
-              .map((w) => (
-                <div key={w.kind} className="warning small">
-                  {w.message}
-                </div>
-              ))}
+            {edit ? (
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => setEditing(s.id!)}>
+                  Change
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={remove.isPending}
+                  onClick={() =>
+                    void remove
+                      .mutateAsync({ id: s.id! })
+                      .then(refresh)
+                      .catch(() => undefined)
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            ) : null}
           </div>
-          {edit ? (
-            <button
-              type="button"
-              className="secondary"
-              disabled={remove.isPending}
-              onClick={() =>
-                void remove
-                  .mutateAsync({ id: s.id! })
-                  .then(refresh)
-                  .catch(() => undefined)
-              }
-            >
-              Remove
-            </button>
-          ) : null}
-        </div>
-      ))}
+        ),
+      )}
+      {remove.error ? <p className="error">{errorText(remove.error)}</p> : null}
       {edit ? (
         <form className="leg-form" onSubmit={(ev) => void submit(ev).catch(() => undefined)}>
           <div className="grid">
@@ -498,15 +542,7 @@ function Housing({ itinerary: d }: { itinerary: Itinerary }) {
               Room
               <select value={roomId} required onChange={(e) => setRoomId(e.target.value)}>
                 <option value="">Pick a room</option>
-                {(units.data ?? []).map((u) => (
-                  <optgroup key={u.id} label={u.name}>
-                    {u.rooms.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name} (floor {r.floor}, {r.bathroom})
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {rooms}
               </select>
             </label>
             <label>
@@ -528,6 +564,81 @@ function Housing({ itinerary: d }: { itinerary: Itinerary }) {
         </form>
       ) : null}
     </div>
+  )
+}
+
+const HOUSING_NEED_TEXT = {
+  flights: 'from their flights',
+  preferred: 'from the dates they asked for',
+  production: 'from the production dates',
+} as const
+const NEEDS_WORK = new Set(['unhoused', 'partly_housed', 'no_dates'])
+
+type Stay = NonNullable<Itinerary['housing']>['stays'][number]
+
+/** Moves a stay to another room or other dates. */
+function EditStay({
+  stay: s,
+  rooms,
+  onDone,
+  refresh,
+}: {
+  stay: Stay
+  rooms: React.ReactNode
+  onDone: () => void
+  refresh: () => Promise<unknown>
+}) {
+  const trpc = useTRPC()
+  const [draft, setDraft] = useState({ roomId: s.room.id ?? '', startsOn: s.startsOn ?? '', endsOn: s.endsOn ?? '' })
+  const update = useMutation(trpc.housing.updateAssignment.mutationOptions())
+  return (
+    <form
+      className="leg-form"
+      onSubmit={(ev) => {
+        ev.preventDefault()
+        void update
+          .mutateAsync({ id: s.id!, ...draft })
+          .then(refresh)
+          .then(onDone)
+          .catch(() => undefined)
+      }}
+    >
+      <div className="grid">
+        <label>
+          Room
+          <select value={draft.roomId} required onChange={(e) => setDraft({ ...draft, roomId: e.target.value })}>
+            {rooms}
+          </select>
+        </label>
+        <label>
+          First night
+          <input
+            type="date"
+            value={draft.startsOn}
+            required
+            onChange={(e) => setDraft({ ...draft, startsOn: e.target.value })}
+          />
+        </label>
+        <label>
+          Move-out day
+          <input
+            type="date"
+            value={draft.endsOn}
+            required
+            onChange={(e) => setDraft({ ...draft, endsOn: e.target.value })}
+          />
+        </label>
+      </div>
+      {update.error ? <p className="error">{errorText(update.error)}</p> : null}
+      <div className="actions">
+        <button type="submit" disabled={update.isPending}>
+          Save stay
+        </button>
+        <button type="button" className="secondary" onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 

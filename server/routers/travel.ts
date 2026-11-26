@@ -11,6 +11,8 @@ import {
   HOUSING_PREFERENCE_FIELDS,
   HOUSING_ROOM_FIELDS,
   HOUSING_UNIT_FIELDS,
+  housingCoverage,
+  housingNeed,
   RENTAL_CAR_FIELDS,
   updateFlightInput,
   updateRentalCarInput,
@@ -29,7 +31,7 @@ import {
   production,
   rentalCar,
 } from '../db/schema.js'
-import { staysInWindow, stayWindow } from '../travel/housing.js'
+import { staysInWindow, stayWindow, visibleWarnings } from '../travel/housing.js'
 import {
   flightRecord,
   housingAssignmentRecord,
@@ -37,6 +39,7 @@ import {
   housingRoomRecord,
   housingUnitRecord,
   rentalCarRecord,
+  travelDates,
   withoutAccessForGuest,
 } from '../travel/records.js'
 import { router, staffProcedure } from '../trpc.js'
@@ -114,7 +117,7 @@ export const travelRouter = router({
     const e = row.engagement
     const seesContact = can(ctx.grants, 'contact')
     const seesTravel = can(ctx.grants, 'travel_logistics')
-    const seesHousing = can(ctx.grants, 'housing_access')
+    const seesHousing = can(ctx.grants, 'housing')
 
     const flights = seesTravel
       ? await ctx.db.select().from(flight).where(eq(flight.engagementId, e.id)).orderBy(asc(flight.scheduledDeparture))
@@ -134,11 +137,27 @@ export const travelRouter = router({
         .orderBy(asc(housingAssignment.startsOn))
       const window = await stayWindow(ctx.db, e.id)
       const warnings = window
-        ? (await staysInWindow(ctx.db, window.from, window.to)).warnings.filter((w) =>
-            stays.some((s) => s.assignment.id === w.assignmentId),
+        ? visibleWarnings(
+            (await staysInWindow(ctx.db, window.from, window.to)).warnings.filter((w) =>
+              stays.some((s) => s.assignment.id === w.assignmentId),
+            ),
+            seesTravel,
           )
         : []
+      const need = housingNeed({
+        ...travelDates(flights ?? []),
+        preferredArrival: e.preferredArrival,
+        preferredDeparture: e.preferredDeparture,
+        rehearsalStart: row.production.rehearsalStart,
+        closing: row.production.closing,
+      })
       housing = {
+        need,
+        coverage: housingCoverage(
+          e.housingProvided,
+          need,
+          stays.map((s) => s.assignment),
+        ),
         stays: stays.map((s) => ({
           ...filterRecord(housingAssignmentRecord(s.assignment), HOUSING_ASSIGNMENT_FIELDS, ctx.grants),
           room: filterRecord(housingRoomRecord(s.room), HOUSING_ROOM_FIELDS, ctx.grants),

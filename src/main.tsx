@@ -19,7 +19,7 @@ import { DraftsPage } from './pages/DraftsPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
 import { HomePage } from './pages/HomePage'
-import { HousingPage } from './pages/HousingPage'
+import { HousingPage, HousingPlanPage } from './pages/HousingPage'
 import { ImportPage } from './pages/ImportPage'
 import { Layout } from './pages/Layout'
 import { PeoplePage } from './pages/PeoplePage'
@@ -60,6 +60,7 @@ const router = createBrowserRouter([
           { path: '/documents/settings', element: <DocumentSettingsPage /> },
           { path: '/arrivals', element: <ArrivalsPage /> },
           { path: '/housing', element: <HousingPage /> },
+          { path: '/housing/plan', element: <HousingPlanPage /> },
           { path: '/people', element: <PeoplePage /> },
           { path: '/people/:personId', element: <PersonPage /> },
           { path: '/agents', element: <AgentsPage /> },

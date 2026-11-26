@@ -1,8 +1,8 @@
 import { TRPCError } from '@trpc/server'
 import { and, asc, eq, gt, lt, ne } from 'drizzle-orm'
 import { z } from 'zod'
-import { filterRecord } from '../../shared/access.js'
-import { addDays } from '../../shared/time.js'
+import { filterRecord, levelAtLeast, levelFor } from '../../shared/access.js'
+import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import {
   addHousingRoomInput,
   assignHousingInput,
@@ -19,11 +19,23 @@ import {
 } from '../../shared/travel.js'
 import type { Db } from '../db/client.js'
 import { engagement, housingAssignment, housingPreference, housingRoom, housingUnit, person } from '../db/schema.js'
-import { staysInWindow } from '../travel/housing.js'
+import { staysInWindow, visibleWarnings } from '../travel/housing.js'
+import { housingPlan, movesInWindow, needsAttention, openProductionIds, type PlanPerson } from '../travel/plan.js'
 import { housingRoomRecord, housingUnitRecord, shortName, withoutAccessForGuest } from '../travel/records.js'
 import { router, staffProcedure } from '../trpc.js'
-import { auditChange, friendly, requireEdit, requireView, writtenKeys } from '../writes.js'
+import { auditChange, friendly, groupsOf, requireEdit, requireView, writtenKeys } from '../writes.js'
 import { engagementOrThrow } from './travel.js'
+
+function coverageCounts(people: readonly PlanPerson[]) {
+  const n = (s: PlanPerson['coverage']['status']) => people.filter((p) => p.coverage.status === s).length
+  return {
+    housed: n('housed'),
+    partlyHoused: n('partly_housed'),
+    unhoused: n('unhoused'),
+    noDates: n('no_dates'),
+    notProvided: n('not_provided'),
+  }
+}
 
 const formatNight = (d: string) =>
   new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -77,7 +89,7 @@ async function checkStayFree(
 export const housingRouter = router({
   /** Every place and its rooms. */
   units: staffProcedure.query(async ({ ctx }) => {
-    requireView(ctx.grants, 'housing_access')
+    requireView(ctx.grants, 'housing')
     const units = await ctx.db.select().from(housingUnit).orderBy(asc(housingUnit.name))
     const rooms = await ctx.db.select().from(housingRoom).orderBy(asc(housingRoom.floor), asc(housingRoom.name))
     return units.map((u) => ({
@@ -89,7 +101,8 @@ export const housingRouter = router({
   }),
 
   createUnit: staffProcedure.input(housingUnitFields).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    // The name and kind are Housing; an address, door code or notes also need Housing access.
+    requireEdit(ctx.grants, groupsOf(writtenKeys(input, HOUSING_UNIT_FIELDS), HOUSING_UNIT_FIELDS))
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [row] = await tx.insert(housingUnit).values(input).returning({ id: housingUnit.id })
@@ -106,9 +119,9 @@ export const housingRouter = router({
   }),
 
   updateUnit: staffProcedure.input(updateHousingUnitInput).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
     const { id, ...changes } = input
     const keys = writtenKeys(changes, HOUSING_UNIT_FIELDS)
+    requireEdit(ctx.grants, ['housing', ...groupsOf(keys, HOUSING_UNIT_FIELDS)])
     if (!keys.length) return { id }
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
@@ -132,7 +145,7 @@ export const housingRouter = router({
 
   /** Deletes a place and its rooms. Refused while anyone is assigned to one of them. */
   removeUnit: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [row] = await tx.delete(housingUnit).where(eq(housingUnit.id, input.id)).returning({ id: housingUnit.id })
@@ -150,7 +163,7 @@ export const housingRouter = router({
   }),
 
   addRoom: staffProcedure.input(addHousingRoomInput).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [row] = await tx.insert(housingRoom).values(input).returning({ id: housingRoom.id })
@@ -168,7 +181,7 @@ export const housingRouter = router({
   }),
 
   updateRoom: staffProcedure.input(updateHousingRoomInput).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     const { id, ...changes } = input
     const keys = writtenKeys(changes, HOUSING_ROOM_FIELDS)
     if (!keys.length) return { id }
@@ -193,7 +206,7 @@ export const housingRouter = router({
   }),
 
   removeRoom: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [row] = await tx.delete(housingRoom).where(eq(housingRoom.id, input.id)).returning({ id: housingRoom.id })
@@ -212,7 +225,7 @@ export const housingRouter = router({
 
   /** The occupancy calendar: who is in each room each night of a window, with warnings. */
   occupancy: staffProcedure.input(occupancyInput).query(async ({ ctx, input }) => {
-    requireView(ctx.grants, 'housing_access')
+    requireView(ctx.grants, 'housing')
     const to = addDays(input.from, input.days)
     const { stays, warnings } = await staysInWindow(ctx.db, input.from, to)
     // Where to look next when this window is empty.
@@ -234,12 +247,45 @@ export const housingRouter = router({
         startsOn: s.startsOn,
         endsOn: s.endsOn,
       })),
-      warnings,
+      warnings: visibleWarnings(warnings, levelAtLeast(levelFor(ctx.grants, 'travel_logistics'), 'view')),
+      moves: await movesInWindow(ctx.db, input.from, to),
+    }
+  }),
+
+  /** Where everyone on one production stays, with dates, and who still needs a room. */
+  plan: staffProcedure.input(z.object({ productionId: z.uuid() })).query(async ({ ctx, input }) => {
+    requireView(ctx.grants, 'housing')
+    requireView(ctx.grants, 'general')
+    const { productions, people } = await housingPlan(ctx.db, ctx.grants, [input.productionId])
+    const p = productions[0]
+    if (!p) throw new TRPCError({ code: 'NOT_FOUND', message: 'That production no longer exists.' })
+    return { production: p, people, counts: coverageCounts(people) }
+  }),
+
+  /** Everyone on a production that hasn't closed who still needs a room, nights or dates. */
+  needs: staffProcedure.query(async ({ ctx }) => {
+    requireView(ctx.grants, 'housing')
+    requireView(ctx.grants, 'general')
+    const ids = await openProductionIds(ctx.db, localDate(new Date(), THEATRE_TZ))
+    const { productions, people } = await housingPlan(ctx.db, ctx.grants, ids)
+    return {
+      productions: productions.map((p) => ({ id: p.id, title: p.title, rehearsalStart: p.rehearsalStart })),
+      people: people
+        .filter((x) => needsAttention(x.coverage.status))
+        .map((x) => ({
+          engagementId: x.engagementId,
+          name: x.name,
+          role: x.role,
+          productionId: x.productionId,
+          productionTitle: x.productionTitle,
+          need: x.need,
+          coverage: x.coverage,
+        })),
     }
   }),
 
   assign: staffProcedure.input(assignHousingInput).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const e = await engagementOrThrow(tx, input.engagementId)
@@ -260,7 +306,7 @@ export const housingRouter = router({
   }),
 
   updateAssignment: staffProcedure.input(updateAssignmentInput).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     const { id, ...changes } = input
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
@@ -296,7 +342,7 @@ export const housingRouter = router({
   }),
 
   removeAssignment: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
-    requireEdit(ctx.grants, ['housing_access'])
+    requireEdit(ctx.grants, ['housing'])
     return friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [before] = await tx

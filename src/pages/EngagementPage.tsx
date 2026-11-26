@@ -43,7 +43,7 @@ export function EngagementPage() {
           .join(' · ')}
       </p>
 
-      {can('travel_logistics') || can('housing_access') ? (
+      {can('travel_logistics') || can('housing') ? (
         <p>
           <Link to={`/engagements/${engagementId}/travel`}>Travel and housing</Link>
         </p>

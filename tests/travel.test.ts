@@ -18,10 +18,20 @@ import { simulateStatus, type FlightSpec } from '../server/flights/provider.js'
 import { changesBetween, setDemoClock } from '../server/flights/track.js'
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
+import { visibleWarnings } from '../server/travel/housing.js'
 import { createCallerFactory, type SessionUser } from '../server/trpc.js'
-import type { Role } from '../shared/access.js'
+import { DEFAULT_GRANTS, filterRecord, type Role } from '../shared/access.js'
 import { dayBounds, utcToLocal, zonedToUtc } from '../shared/time.js'
-import { housingWarnings, staysOverlap, type StayForCheck } from '../shared/travel.js'
+import {
+  HOUSING_UNIT_FIELDS,
+  housingCoverage,
+  housingMoves,
+  housingNeed,
+  housingWarnings,
+  nightRangeText,
+  staysOverlap,
+  type StayForCheck,
+} from '../shared/travel.js'
 
 describe('time zones', () => {
   it('turns airport-local times into instants, across the spring DST change', () => {
@@ -100,6 +110,108 @@ describe('simulated flight feed', () => {
     expect(changesBetween({ ...row, flightNumber: '2007' }, late)).toEqual([
       { kind: 'delayed', detail: { minutes: 45 } },
     ])
+  })
+})
+
+describe('who still needs housing', () => {
+  it('drops the flight-date warnings for a role without travel logistics', () => {
+    const warnings = [
+      { assignmentId: 'a', kind: 'private_bathroom' as const, message: 'shares a bath' },
+      { assignmentId: 'a', kind: 'arrives_before_housing' as const, message: 'lands Feb 1' },
+      { assignmentId: 'a', kind: 'leaves_after_housing' as const, message: 'flies home Mar 2' },
+    ]
+    expect(visibleWarnings(warnings, true)).toHaveLength(3)
+    expect(visibleWarnings(warnings, false).map((w) => w.kind)).toEqual(['private_bathroom'])
+  })
+
+  const dates = { preferredArrival: null, preferredDeparture: null, rehearsalStart: null, closing: null }
+
+  it('takes the nights from flights, then the dates they asked for, then the production', () => {
+    expect(
+      housingNeed({ ...dates, arrivesOn: '2027-01-10', leavesOn: '2027-02-15', preferredArrival: '2027-01-09' }),
+    ).toEqual({ from: '2027-01-10', to: '2027-02-15', source: 'flights' })
+    expect(housingNeed({ ...dates, preferredArrival: '2027-01-09', preferredDeparture: '2027-02-16' })).toEqual({
+      from: '2027-01-09',
+      to: '2027-02-16',
+      source: 'preferred',
+    })
+    // Closing night is the last night they need; they leave the next day.
+    expect(housingNeed({ ...dates, rehearsalStart: '2027-01-11', closing: '2027-02-14' })).toEqual({
+      from: '2027-01-11',
+      to: '2027-02-15',
+      source: 'production',
+    })
+    expect(housingNeed(dates)).toBeNull()
+  })
+
+  it('finds missing nights as runs, and tells housed from unhoused', () => {
+    const need = { from: '2027-01-10', to: '2027-01-20', source: 'preferred' as const }
+    expect(housingCoverage(true, need, [])).toMatchObject({ status: 'unhoused', missingNights: 10 })
+    expect(housingCoverage(true, need, [{ startsOn: '2027-01-10', endsOn: '2027-01-20' }])).toMatchObject({
+      status: 'housed',
+      missing: [],
+    })
+    const split = housingCoverage(true, need, [
+      { startsOn: '2027-01-12', endsOn: '2027-01-15' },
+      { startsOn: '2027-01-15', endsOn: '2027-01-19' },
+    ])
+    expect(split.status).toBe('partly_housed')
+    expect(split.missing).toEqual([
+      { from: '2027-01-10', to: '2027-01-12' },
+      { from: '2027-01-19', to: '2027-01-20' },
+    ])
+    expect(split.missingNights).toBe(3)
+    expect(nightRangeText(split.missing[0]!)).toBe('nights of Jan 10 to Jan 11')
+    expect(nightRangeText(split.missing[1]!)).toBe('night of Jan 19')
+    // A stay entirely outside the nights they need covers none of them.
+    expect(housingCoverage(true, need, [{ startsOn: '2027-03-01', endsOn: '2027-03-05' }]).status).toBe('unhoused')
+  })
+
+  it('needs dates when housing is in the deal but nothing says when, and skips deals without housing', () => {
+    expect(housingCoverage(true, null, []).status).toBe('no_dates')
+    expect(housingCoverage(false, null, []).status).toBe('not_provided')
+    expect(housingCoverage(false, null, [{ startsOn: '2027-01-10', endsOn: '2027-01-12' }]).status).toBe('housed')
+  })
+
+  it('lists move-outs before move-ins and marks a same-day turnover', () => {
+    const s = (assignmentId: string, roomId: string, startsOn: string, endsOn: string) => ({
+      assignmentId,
+      engagementId: `e-${assignmentId}`,
+      personName: assignmentId,
+      roomId,
+      startsOn,
+      endsOn,
+    })
+    const moves = housingMoves(
+      [
+        s('Ava', 'r1', '2027-01-01', '2027-02-15'),
+        s('Ben', 'r1', '2027-02-15', '2027-03-30'),
+        s('Cal', 'r2', '2027-02-16', '2027-03-30'),
+      ],
+      '2027-02-14',
+      '2027-02-21',
+    )
+    expect(moves.map((m) => [m.date, m.kind, m.personName, m.turnover])).toEqual([
+      ['2027-02-15', 'out', 'Ava', true],
+      ['2027-02-15', 'in', 'Ben', true],
+      ['2027-02-16', 'in', 'Cal', false],
+    ])
+  })
+
+  it('splits where a place is from how to get in', () => {
+    const unit = {
+      id: 'u1',
+      name: 'Company house',
+      kind: 'company_house',
+      address: '1 Main St',
+      accessNotes: 'Lockbox',
+      doorCode: '1234',
+      notes: 'Wi-Fi password',
+    }
+    const placementOnly = filterRecord(unit, HOUSING_UNIT_FIELDS, { housing: 'view' })
+    expect(placementOnly).toEqual({ id: 'u1', name: 'Company house', kind: 'company_house' })
+    const full = filterRecord(unit, HOUSING_UNIT_FIELDS, DEFAULT_GRANTS.company_manager)
+    expect(full).toMatchObject({ address: '1 Main St', doorCode: '1234', notes: 'Wi-Fi password' })
   })
 })
 
@@ -345,5 +457,48 @@ describe.skipIf(!url)('travel and housing against Postgres', () => {
     await expect(
       db.insert(housingAssignment).values({ ...stay, roomId: b.id, startsOn: '2032-04-03' }),
     ).rejects.toMatchObject({ cause: { code: '23P01' } })
+  })
+
+  it('the plan shows where each person stays and who is missing nights', async () => {
+    const productionId = (await db.select().from(engagement).where(eq(engagement.id, otherEngagementId)))[0]!
+      .productionId
+    const before = await asCm().housing.plan({ productionId })
+    const roommateStay = before.people.find((p) => p.engagementId === otherEngagementId)!.stays[0]!
+    expect(roommateStay).toMatchObject({ roomName: 'Room 2', startsOn: '2032-02-01', endsOn: '2032-03-15' })
+    expect(JSON.stringify(before)).not.toMatch(/address|doorCode|accessNotes/)
+
+    // The roommate now moves in two nights late.
+    await asCm().housing.updateAssignment({ id: roommateStay.assignmentId, startsOn: '2032-02-03' })
+    const plan = await asCm().housing.plan({ productionId })
+    const roommate = plan.people.find((p) => p.engagementId === otherEngagementId)!
+    expect(roommate.need).toEqual({ from: '2032-02-01', to: '2032-03-15', source: 'preferred' })
+    expect(roommate.coverage).toEqual({
+      status: 'partly_housed',
+      missing: [{ from: '2032-02-01', to: '2032-02-03' }],
+      missingNights: 2,
+    })
+    // People who need something come first.
+    expect(plan.people[0]!.engagementId).toBe(otherEngagementId)
+    expect(plan.counts.partlyHoused).toBe(1)
+
+    const traveler = plan.people.find((p) => p.engagementId === engagementId)!
+    expect(traveler.need?.source).toBe('flights')
+    expect(traveler.coverage.status).toBe('housed')
+
+    const needs = await asCm().housing.needs()
+    expect(needs.people.find((p) => p.engagementId === otherEngagementId)?.coverage.status).toBe('partly_housed')
+    expect(needs.people.some((p) => p.engagementId === engagementId)).toBe(false)
+
+    const occ = await asCm().housing.occupancy({ from: '2032-02-01', days: 7 })
+    expect(occ.moves.filter((m) => [engagementId, otherEngagementId].includes(m.engagementId))).toEqual([
+      expect.objectContaining({ date: '2032-02-01', kind: 'in', engagementId }),
+      expect.objectContaining({ date: '2032-02-03', kind: 'in', engagementId: otherEngagementId }),
+    ])
+
+    const itinerary = await asCm().travel.forEngagement({ engagementId: otherEngagementId })
+    expect(itinerary.housing?.coverage.status).toBe('partly_housed')
+
+    await expect(asFinance().housing.plan({ productionId })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await expect(asFinance().housing.needs()).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 })

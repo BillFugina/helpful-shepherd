@@ -11,6 +11,7 @@ import {
   auditEvent,
   engagement,
   engagementDraft,
+  housingUnit,
   oauthAccessToken,
   oauthClient,
   oauthConsent,
@@ -71,6 +72,7 @@ describe.skipIf(!url)('connector against Postgres', () => {
   let productionId = ''
   let personId = ''
   let engagementId = ''
+  let unitId = ''
   const people: string[] = []
 
   const asCm = () => createCaller({ db, user: cm })
@@ -130,6 +132,7 @@ describe.skipIf(!url)('connector against Postgres', () => {
     await db.delete(production).where(eq(production.seasonId, seasonId))
     await db.delete(season).where(eq(season.id, seasonId))
     if (people.length) await db.delete(person).where(inArray(person.id, people))
+    if (unitId) await db.delete(housingUnit).where(eq(housingUnit.id, unitId))
     await db.delete(oauthClient).where(eq(oauthClient.clientId, clientId))
     await db.delete(user).where(inArray(user.id, [cm.id, finance.id]))
   })
@@ -148,6 +151,42 @@ describe.skipIf(!url)('connector against Postgres', () => {
     const profile = text(await runConnectorTool(env(cm), 'get_person', { personId }))
     expect(profile).not.toContain('1990-04-05')
     expect(profile).not.toContain('KTN12345')
+  })
+
+  it('says where people stay, but never the address, door code or how to get in', async () => {
+    const unit = await asCm().housing.createUnit({
+      name: `Connector house ${tag}`,
+      kind: 'company_house',
+      address: '9 Secret Lane',
+      doorCode: '4321',
+      accessNotes: 'Key under the mat',
+    })
+    unitId = unit.id
+    const room = await asCm().housing.addRoom({ unitId, name: 'Blue room', floor: 1, bathroom: 'Hall bath' })
+    await asCm().housing.assign({ engagementId, roomId: room.id, startsOn: '2032-02-03', endsOn: '2032-03-21' })
+
+    const plan = await runConnectorTool(env(cm), 'housing_plan', { productionId })
+    expect(plan.isError).toBeUndefined()
+    const body = text(plan)
+    expect(body).toContain(`Connector house ${tag}`)
+    expect(body).toContain('Blue room')
+    // No flights or asked-for dates, so the production's dates set the nights: Feb 1 to the day after closing.
+    const parsed = JSON.parse(body) as {
+      people: { engagementId: string; status: string; missingNights: { firstNight: string; moveOutDay: string }[] }[]
+    }
+    const me = parsed.people.find((p) => p.engagementId === engagementId)
+    expect(me?.status).toBe('Missing nights')
+    expect(me?.missingNights).toEqual([{ firstNight: '2032-02-01', moveOutDay: '2032-02-03' }])
+
+    const card = text(await runConnectorTool(env(cm), 'person_card', { engagementId }))
+    expect(card).toContain('Blue room')
+    for (const secret of [body, card]) {
+      expect(secret).not.toContain('9 Secret Lane')
+      expect(secret).not.toContain('4321')
+      expect(secret).not.toContain('Key under the mat')
+    }
+    // Finance has no housing grant, in the app or over the connector.
+    expect((await runConnectorTool(env(finance), 'housing_plan', { productionId })).isError).toBe(true)
   })
 
   it("keeps Finance's pay view but not more", async () => {

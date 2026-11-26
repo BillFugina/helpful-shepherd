@@ -93,10 +93,15 @@ export const RENTAL_CAR_FIELDS = {
   notes: 'travel_logistics',
 } as const satisfies FieldMap
 
+/**
+ * Where people stay is the Housing group; how to get in (address, door code,
+ * entry instructions, notes) is Housing access, which never goes over the
+ * Claude connector. So a place's name should be a label, not its address.
+ */
 export const HOUSING_UNIT_FIELDS = {
   id: 'id',
-  name: 'housing_access',
-  kind: 'housing_access',
+  name: 'housing',
+  kind: 'housing',
   address: 'housing_access',
   accessNotes: 'housing_access',
   doorCode: 'housing_access',
@@ -106,17 +111,17 @@ export const HOUSING_UNIT_FIELDS = {
 export const HOUSING_ROOM_FIELDS = {
   id: 'id',
   unitId: 'id',
-  name: 'housing_access',
-  floor: 'housing_access',
-  bathroom: 'housing_access',
+  name: 'housing',
+  floor: 'housing',
+  bathroom: 'housing',
 } as const satisfies FieldMap
 
 export const HOUSING_ASSIGNMENT_FIELDS = {
   id: 'id',
   engagementId: 'id',
   roomId: 'id',
-  startsOn: 'housing_access',
-  endsOn: 'housing_access',
+  startsOn: 'housing',
+  endsOn: 'housing',
 } as const satisfies FieldMap
 
 export const HOUSING_PREFERENCE_FIELDS = {
@@ -357,4 +362,160 @@ export function nightsIn(stay: { startsOn: string; endsOn: string }, from: strin
     if (night >= stay.startsOn && night < stay.endsOn) out.push(night)
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Who still needs housing, and who moves in or out. Pure, like the warnings,
+// so the Housing page, the plan, the travel page, the connector and the
+// tests all agree.
+// ---------------------------------------------------------------------------
+
+/**
+ * The nights someone needs a bed: the first night is the day they get to
+ * town, and they leave on the last day (no bed that night). Taken from their
+ * flights when they're booked, else the dates they asked for, else the
+ * production's first rehearsal to the day after closing.
+ */
+export interface HousingNeed {
+  from: string
+  to: string
+  source: 'flights' | 'preferred' | 'production'
+}
+
+export const HOUSING_NEED_SOURCE_LABELS: Record<HousingNeed['source'], string> = {
+  flights: 'from their flights',
+  preferred: 'from the dates they asked for',
+  production: 'from the production dates',
+}
+
+export function housingNeed(e: {
+  arrivesOn?: string
+  leavesOn?: string
+  preferredArrival: string | null
+  preferredDeparture: string | null
+  rehearsalStart: string | null
+  closing: string | null
+}): HousingNeed | null {
+  const from = e.arrivesOn ?? e.preferredArrival ?? e.rehearsalStart
+  const to = e.leavesOn ?? e.preferredDeparture ?? (e.closing ? addDays(e.closing, 1) : null)
+  if (!from || !to || from >= to) return null
+  const source =
+    e.arrivesOn || e.leavesOn ? 'flights' : e.preferredArrival || e.preferredDeparture ? 'preferred' : 'production'
+  return { from, to, source }
+}
+
+export const COVERAGE_STATUSES = ['unhoused', 'partly_housed', 'no_dates', 'housed', 'not_provided'] as const
+export type CoverageStatus = (typeof COVERAGE_STATUSES)[number]
+export const COVERAGE_STATUS_LABELS: Record<CoverageStatus, string> = {
+  unhoused: 'Needs a room',
+  partly_housed: 'Missing nights',
+  no_dates: 'Needs dates',
+  housed: 'Housed',
+  not_provided: 'Not in their deal',
+}
+
+/** A run of nights: the first night, and the morning after the last. */
+export interface NightRange {
+  from: string
+  to: string
+}
+
+export interface HousingCoverage {
+  status: CoverageStatus
+  /** Nights they need with no room, as runs. */
+  missing: NightRange[]
+  missingNights: number
+}
+
+/** Days between two calendar dates. */
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000)
+}
+
+/**
+ * Whether someone's stays cover the nights they need. Someone whose deal
+ * doesn't include housing but who has a room anyway counts as housed.
+ */
+export function housingCoverage(
+  provided: boolean,
+  need: HousingNeed | null,
+  stays: readonly { startsOn: string; endsOn: string }[],
+): HousingCoverage {
+  const none = { missing: [], missingNights: 0 }
+  if (!provided && !stays.length) return { status: 'not_provided', ...none }
+  if (!provided) return { status: 'housed', ...none }
+  if (!need) return { status: stays.length ? 'housed' : 'no_dates', ...none }
+  const missing: NightRange[] = []
+  let missingNights = 0
+  const total = daysBetween(need.from, need.to)
+  for (let i = 0; i < total; i++) {
+    const night = addDays(need.from, i)
+    if (stays.some((s) => night >= s.startsOn && night < s.endsOn)) continue
+    missingNights++
+    const last = missing[missing.length - 1]
+    if (last && last.to === night) last.to = addDays(night, 1)
+    else missing.push({ from: night, to: addDays(night, 1) })
+  }
+  const status = missingNights === 0 ? 'housed' : missingNights === total ? 'unhoused' : 'partly_housed'
+  return { status, missing, missingNights }
+}
+
+/** "Jan 12 to 14" or "Jan 12" for one night, for a run of nights. */
+export function nightRangeText(r: NightRange): string {
+  const last = addDays(r.to, -1)
+  return last === r.from ? `night of ${shortDate(r.from)}` : `nights of ${shortDate(r.from)} to ${shortDate(last)}`
+}
+
+export interface HousingMove {
+  date: string
+  kind: 'in' | 'out'
+  assignmentId: string
+  engagementId: string
+  personName: string
+  roomId: string
+  /** Someone else moves into the same room that day, or moved out of it: the room has to be turned over in hours. */
+  turnover: boolean
+}
+
+/** Move-ins and move-outs on days in [from, to), move-outs first each day, so turnovers read in order. */
+export function housingMoves(
+  stays: readonly {
+    assignmentId: string
+    engagementId: string
+    personName: string
+    roomId: string
+    startsOn: string
+    endsOn: string
+  }[],
+  from: string,
+  to: string,
+): HousingMove[] {
+  const out: HousingMove[] = []
+  const inWindow = (d: string) => d >= from && d < to
+  for (const s of stays) {
+    const base = {
+      assignmentId: s.assignmentId,
+      engagementId: s.engagementId,
+      personName: s.personName,
+      roomId: s.roomId,
+    }
+    if (inWindow(s.endsOn)) {
+      const next = stays.some(
+        (o) => o.roomId === s.roomId && o.assignmentId !== s.assignmentId && o.startsOn === s.endsOn,
+      )
+      out.push({ ...base, date: s.endsOn, kind: 'out', turnover: next })
+    }
+    if (inWindow(s.startsOn)) {
+      const prev = stays.some(
+        (o) => o.roomId === s.roomId && o.assignmentId !== s.assignmentId && o.endsOn === s.startsOn,
+      )
+      out.push({ ...base, date: s.startsOn, kind: 'in', turnover: prev })
+    }
+  }
+  return out.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      (a.kind === b.kind ? 0 : a.kind === 'out' ? -1 : 1) ||
+      a.personName.localeCompare(b.personName),
+  )
 }
