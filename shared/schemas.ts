@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { ACCESS_LEVELS, FIELD_GROUPS, ROLES, type MaskedPersonField } from './access.js'
 
 /** Person fields whose values only come back through Reveal. */
-export const REVEALABLE_PERSON_FIELDS = ['dob', 'tsaKtn', 'frequentFlyer'] as const
+export const REVEALABLE_PERSON_FIELDS = ['dob', 'homeStreet', 'homeCityStateZip', 'tsaKtn', 'frequentFlyer'] as const
 export type RevealablePersonField = (typeof REVEALABLE_PERSON_FIELDS)[number]
 
 // Compile-time check: this list is exactly the person fields in a masked group,

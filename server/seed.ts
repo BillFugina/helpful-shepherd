@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { hashPassword } from 'better-auth/crypto'
 import { eq, inArray, or } from 'drizzle-orm'
 import { DEFAULT_GRANTS, ROLES, type Role } from '../shared/access.js'
+import { DEFAULT_RIDER_BODY, resolveContract, type ContractContext } from '../shared/contracts.js'
+import { makeStandInForm } from './contracts/pdf.js'
+import { loadOrganization, valuesToFreeze } from './contracts/service.js'
 import { airportTz, THEATRE_AIRPORT, THEATRE_TZ, zonedToUtc } from '../shared/time.js'
 import { encryptOptional } from './crypto/fields.js'
 import type { Db } from './db/client.js'
@@ -9,12 +12,15 @@ import {
   account,
   agent,
   conflict,
+  contract,
+  contractTemplate,
   engagement,
   flight,
   housingAssignment,
   housingPreference,
   housingRoom,
   housingUnit,
+  organization,
   person,
   production,
   rentalCar,
@@ -171,6 +177,55 @@ const STATUS_BY_PRODUCTION = [
   ['offer_accepted', 'offer_accepted', 'offer_accepted', 'offer_accepted', 'offer_accepted'],
 ] as const
 
+/** Made-up home addresses by home airport. Person 19 has none, to show a blank field. */
+const DEMO_CITIES: Record<string, string> = {
+  LGA: 'New York, NY 10025',
+  JFK: 'Brooklyn, NY 11215',
+  ORD: 'Chicago, IL 60614',
+  BOS: 'Boston, MA 02118',
+  LAX: 'Los Angeles, CA 90026',
+  ATL: 'Atlanta, GA 30307',
+  RDU: 'Raleigh, NC 27605',
+  EWR: 'Newark, NJ 07102',
+  DCA: 'Washington, DC 20009',
+  MIA: 'Miami, FL 33137',
+  SEA: 'Seattle, WA 98122',
+  PHL: 'Philadelphia, PA 19147',
+  CLT: 'Charlotte, NC 28203',
+  IAD: 'Arlington, VA 22201',
+  MSP: 'Minneapolis, MN 55408',
+  DEN: 'Denver, CO 80206',
+  BNA: 'Nashville, TN 37206',
+  SFO: 'San Francisco, CA 94110',
+  PIT: 'Pittsburgh, PA 15213',
+}
+const NO_ADDRESS = 18
+
+/** The theatre's details on the demo's contracts. Every number is fake. */
+export const DEMO_ORGANIZATION = {
+  name: 'Theatre Raleigh (demo)',
+  street: '100 Example Street',
+  cityStateZip: 'Raleigh, NC 27601',
+  phone: '919-555-0100',
+  email: 'company.manager@example.com',
+  signerName: 'Pat Example',
+  ein: '00-0000000',
+  unemploymentNumber: 'DEMO-000000',
+  equityEmployerAgreement: 'DEMO-ITC-0000',
+}
+
+const DEMO_VENUE = {
+  venueName: 'Main Stage (demo)',
+  venueCapacity: 280,
+  topTicketCents: 6500,
+  scheduledPerformances: 20,
+  rehearsalLocation: 'Rehearsal Hall (demo), 100 Example Street, Raleigh',
+  rehearsalCallTime: '10:00 AM',
+}
+
+/** SDC directors and choreographers are paid a flat fee, in dollars. */
+const SDC_FEES: Record<string, number> = { Director: 8000, Choreographer: 6000 }
+
 function addDays(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + days)
@@ -268,6 +323,7 @@ export interface DemoCounts {
   productions: number
   engagements: number
   conflicts: number
+  contracts: number
   flights: number
   cars: number
   housingUnits: number
@@ -293,6 +349,13 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
     // Flights, cars and stays go with their engagements; stays in demo rooms go first.
     await tx.delete(housingAssignment).where(inArray(housingAssignment.roomId, demoRooms))
     await tx.delete(housingUnit).where(eq(housingUnit.isDemo, true))
+    // Contracts go with their engagements, but any made from a demo template go first.
+    const demoTemplates = tx
+      .select({ id: contractTemplate.id })
+      .from(contractTemplate)
+      .where(eq(contractTemplate.isDemo, true))
+    await tx.delete(contract).where(or(eq(contract.isDemo, true), inArray(contract.templateId, demoTemplates)))
+    await tx.delete(contractTemplate).where(eq(contractTemplate.isDemo, true))
     await tx
       .delete(engagement)
       .where(
@@ -327,6 +390,17 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
               PERSON_STORAGE.frequentFlyer.aad,
               key,
             ),
+            unionMemberId: `DEMO-${n}`,
+            homeStreetEnc: encryptOptional(
+              i === NO_ADDRESS ? null : `${100 + i * 7} Example Avenue`,
+              PERSON_STORAGE.homeStreet.aad,
+              key,
+            ),
+            homeCityStateZipEnc: encryptOptional(
+              i === NO_ADDRESS ? null : (DEMO_CITIES[p.homeAirport] ?? null),
+              PERSON_STORAGE.homeCityStateZip.aad,
+              key,
+            ),
             isDemo: true,
           }
         }),
@@ -357,7 +431,15 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
 
     const productions = await tx
       .insert(production)
-      .values(DEMO_PRODUCTIONS.map((p) => ({ ...p, seasonId: s!.id, performanceSchedule: SCHEDULE, isDemo: true })))
+      .values(
+        DEMO_PRODUCTIONS.map((p) => ({
+          ...p,
+          ...DEMO_VENUE,
+          seasonId: s!.id,
+          performanceSchedule: SCHEDULE,
+          isDemo: true,
+        })),
+      )
       .returning({ id: production.id })
 
     // 25 deals for 20 people: production k takes people 4k..4k+4, so the
@@ -376,6 +458,7 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
           contractType: slot.contractType,
           pipelineStatus: STATUS_BY_PRODUCTION[k]![j]!,
           weeklyPayCents: (slot.pay + ((pi * 25) % 150)) * 100,
+          feeCents: SDC_FEES[slot.role] ? SDC_FEES[slot.role]! * 100 : null,
           commissionPercent: agentIndex === null ? null : 10,
           weeklyStipendCents: local ? null : 25000,
           travelProvided: !local,
@@ -398,6 +481,12 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       { at: 19, startsOn: '2027-07-20', endsOn: '2027-07-20', description: 'Family event, morning only (demo)' },
     ]
     await tx.insert(conflict).values(conflictRows.map(({ at, ...c }) => ({ ...c, engagementId: engagements[at]!.id })))
+
+    const contractCount = await seedContracts(tx, {
+      productions: DEMO_PRODUCTIONS.map((p) => ({ ...p, ...DEMO_VENUE })),
+      seasonName: '2027 Season (demo)',
+      engagements: engagementRows.map((e, i) => ({ ...e, id: engagements[i]!.id })),
+    })
 
     // Travel, cars and housing for everyone the theater brings in.
     const units = await tx
@@ -487,6 +576,7 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       productions: productions.length,
       engagements: engagements.length,
       conflicts: conflictRows.length,
+      contracts: contractCount,
       flights: flightRows.length,
       cars: carRows.length,
       housingUnits: units.length,
@@ -494,4 +584,143 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       stays: stayRows.length,
     }
   })
+}
+
+/** The contract a demo deal has reached, from its pipeline status. Nothing before the fourth production's offers. */
+function demoContractStatus(k: number, status: string): 'draft' | 'sent' | 'signed' | null {
+  if (status === 'offer_accepted') return k <= 3 ? 'draft' : null
+  if (status === 'contract_sent') return 'sent'
+  return 'signed'
+}
+
+/**
+ * The theatre's details (only if none are saved), demo stand-ins for the two
+ * union forms, a generic rider, and each demo deal's contracts as far along as
+ * its pipeline status. Sent and signed contracts keep the values that went out.
+ */
+async function seedContracts(
+  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
+  demo: {
+    productions: ((typeof DEMO_PRODUCTIONS)[number] & typeof DEMO_VENUE)[]
+    seasonName: string
+    engagements: {
+      id: string
+      productionId: string
+      role: string
+      contractType: string
+      pipelineStatus: string
+      weeklyPayCents: number
+      weeklyStipendCents: number | null
+      feeCents: number | null
+      personId: string
+    }[]
+  },
+): Promise<number> {
+  await tx
+    .insert(organization)
+    .values({ id: 1, ...DEMO_ORGANIZATION })
+    .onConflictDoNothing()
+  const employer = await loadOrganization(tx)
+
+  const forms = [
+    { name: 'Equity ITC contract (demo stand-in)', format: 'equity_itc_form', contractType: 'equity_itc' },
+    { name: 'SDC agreement (demo stand-in)', format: 'sdc_form', contractType: 'sdc' },
+  ] as const
+  const templateRows = [
+    ...(await Promise.all(
+      forms.map(async (f) => {
+        const id = randomUUID()
+        return {
+          id,
+          familyId: id,
+          name: f.name,
+          format: f.format,
+          contractType: f.contractType,
+          version: 1,
+          pdf: Buffer.from(await makeStandInForm(f.format)),
+          fileName: `${f.format}-demo.pdf`,
+          isDemo: true,
+        }
+      }),
+    )),
+    (() => {
+      const id = randomUUID()
+      return {
+        id,
+        familyId: id,
+        name: 'Theatre Raleigh ITC rider (demo)',
+        format: 'text' as const,
+        contractType: 'equity_itc' as const,
+        version: 1,
+        body: DEFAULT_RIDER_BODY,
+        isDemo: true,
+      }
+    })(),
+  ]
+  await tx.insert(contractTemplate).values(templateRows)
+
+  const people = await tx
+    .select({
+      id: person.id,
+      legalName: person.legalName,
+      unionMemberId: person.unionMemberId,
+      email: person.email,
+      cell: person.cell,
+    })
+    .from(person)
+    .where(eq(person.isDemo, true))
+  const peopleById = new Map(people.map((p) => [p.id, p]))
+
+  const rows: (typeof contract.$inferInsert)[] = []
+  demo.engagements.forEach((e, i) => {
+    const k = Math.floor(i / 5)
+    const status = demoContractStatus(k, e.pipelineStatus)
+    if (!status) return
+    const prod = demo.productions[k]!
+    const sentOn = addDays(prod.rehearsalStart, -60)
+    const p = peopleById.get(e.personId)!
+    const context: ContractContext = {
+      today: sentOn,
+      employer,
+      person: { ...p, homeStreet: null, homeCityStateZip: null },
+      engagement: {
+        role: e.role,
+        weeklyPayCents: e.weeklyPayCents,
+        weeklyStipendCents: e.weeklyStipendCents,
+        feeCents: e.feeCents,
+      },
+      production: {
+        title: prod.title,
+        rehearsalStart: prod.rehearsalStart,
+        opening: prod.opening,
+        closing: prod.closing,
+        venueName: prod.venueName,
+        venueCapacity: prod.venueCapacity,
+        topTicketCents: prod.topTicketCents,
+        scheduledPerformances: prod.scheduledPerformances,
+        rehearsalLocation: prod.rehearsalLocation,
+        rehearsalCallTime: prod.rehearsalCallTime,
+      },
+      season: { name: demo.seasonName },
+    }
+    for (const t of templateRows.filter((t) => t.contractType === e.contractType)) {
+      const sent = status !== 'draft'
+      rows.push({
+        engagementId: e.id,
+        templateId: t.id,
+        templateFamilyId: t.familyId,
+        status,
+        sentOn: sent ? sentOn : null,
+        sentAt: sent ? new Date(`${sentOn}T15:00:00Z`) : null,
+        sentTo: sent ? 'Them and their agent (demo)' : null,
+        sentValues: sent
+          ? valuesToFreeze(resolveContract({ format: t.format, body: 'body' in t ? t.body : null }, context, {}))
+          : null,
+        signedOn: status === 'signed' ? addDays(sentOn, 9) : null,
+        isDemo: true,
+      })
+    }
+  })
+  if (rows.length) await tx.insert(contract).values(rows)
+  return rows.length
 }

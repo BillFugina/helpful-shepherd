@@ -38,7 +38,7 @@ export type FieldGroup = (typeof FIELD_GROUPS)[number]
 export const FIELD_GROUP_LABELS: Record<FieldGroup, string> = {
   general: 'General (roster, roles, dates, conflicts)',
   contact: 'Contact (cell, email, agent)',
-  personal_id: 'Personal ID (DOB)',
+  personal_id: 'Personal ID (DOB, home address)',
   travel_id: 'Travel ID (TSA/KTN, frequent flyer)',
   pay_terms: 'Pay terms (pay, commission, stipend)',
   contracts: 'Contracts',
@@ -119,11 +119,16 @@ export const PERSON_FIELDS = {
   id: 'id',
   legalName: 'general',
   preferredName: 'general',
+  // Equity or SDC member number, printed on union contracts.
+  unionMemberId: 'general',
   email: 'contact',
   cell: 'contact',
   homeAirport: 'contact',
   airportPrefs: 'contact',
   dob: 'personal_id',
+  // Home address, for the union contracts. Encrypted and masked like DOB.
+  homeStreet: 'personal_id',
+  homeCityStateZip: 'personal_id',
   tsaKtn: 'travel_id',
   frequentFlyer: 'travel_id',
 } as const satisfies FieldMap

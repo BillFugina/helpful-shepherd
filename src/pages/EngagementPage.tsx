@@ -7,6 +7,7 @@ import { errorText } from '../lib/errors'
 import { displayName, dollars, draftFromEngagement, formatDate, termsFromDraft, TextInput, useCan } from '../lib/fields'
 import { useTRPC } from '../lib/trpc'
 import type { Outputs } from '../lib/types'
+import { EngagementContracts } from './ContractPages'
 import { StatusCell } from './SeasonPage'
 
 type Detail = Outputs['engagements']['get']
@@ -48,6 +49,7 @@ export function EngagementPage() {
       ) : null}
       {can('general', 'edit') ? <EditTerms detail={d} /> : <ReadTerms detail={d} />}
       <Conflicts detail={d} />
+      <EngagementContracts engagementId={engagementId} />
       {can('general', 'edit') && can('contact', 'edit') && can('pay_terms', 'edit') ? (
         <RemoveButton detail={d} />
       ) : null}
@@ -62,6 +64,7 @@ function ReadTerms({ detail: d }: { detail: Detail }) {
     ['Contract', e.contractType ? CONTRACT_TYPE_LABELS[e.contractType] : undefined],
     ['Weekly pay', 'weeklyPayCents' in e ? dollars(e.weeklyPayCents) : undefined],
     ['Weekly stipend', 'weeklyStipendCents' in e ? dollars(e.weeklyStipendCents) : undefined],
+    ['Flat fee', 'feeCents' in e && e.feeCents !== null ? dollars(e.feeCents) : undefined],
     ['Agent', d.agent ? [d.agent.name, d.agent.agency].filter(Boolean).join(', ') : undefined],
     [
       'Commission',

@@ -65,6 +65,11 @@ export function TermsFields({
               <TextInput field={f} label="Weekly stipend ($)" inputMode="decimal" hint="Negotiated, non-taxable" />
             )}
           </F>
+          <F name={n('fee')} validators={{ onChange: moneyValidator }}>
+            {(f) => (
+              <TextInput field={f} label="Flat fee ($)" inputMode="decimal" hint="SDC directors and choreographers" />
+            )}
+          </F>
         </div>
       )
     case 'commission':

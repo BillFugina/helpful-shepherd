@@ -39,6 +39,12 @@ export function productionRecord(row: typeof production.$inferSelect): Productio
     opening: row.opening,
     closing: row.closing,
     performanceSchedule: row.performanceSchedule,
+    venueName: row.venueName,
+    venueCapacity: row.venueCapacity,
+    topTicketCents: row.topTicketCents,
+    scheduledPerformances: row.scheduledPerformances,
+    rehearsalLocation: row.rehearsalLocation,
+    rehearsalCallTime: row.rehearsalCallTime,
   }
 }
 
@@ -58,6 +64,7 @@ export function engagementRecord(row: typeof engagement.$inferSelect): Engagemen
     weeklyPayCents: row.weeklyPayCents,
     commissionPercent: row.commissionPercent,
     weeklyStipendCents: row.weeklyStipendCents,
+    feeCents: row.feeCents,
     travelProvided: row.travelProvided,
     carProvided: row.carProvided,
     housingProvided: row.housingProvided,

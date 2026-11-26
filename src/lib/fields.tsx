@@ -174,6 +174,7 @@ export interface TermsDraft {
   weeklyPay: string
   commission: string
   weeklyStipend: string
+  fee: string
   travelProvided: boolean
   carProvided: boolean
   housingProvided: boolean
@@ -191,6 +192,7 @@ export const EMPTY_TERMS: TermsDraft = {
   weeklyPay: '',
   commission: '',
   weeklyStipend: '',
+  fee: '',
   travelProvided: false,
   carProvided: false,
   housingProvided: false,
@@ -230,6 +232,7 @@ export function termsFromDraft(draft: TermsDraft, opts: { payTerms: boolean; sta
           weeklyPayCents: parseMoney(draft.weeklyPay) ?? null,
           commissionPercent: parsePercent(draft.commission) ?? null,
           weeklyStipendCents: parseMoney(draft.weeklyStipend) ?? null,
+          feeCents: parseMoney(draft.fee) ?? null,
         }
       : {}),
   }
@@ -245,6 +248,7 @@ export function draftFromEngagement(e: Partial<Record<string, unknown>>): TermsD
     weeklyPay: centsToInput(e.weeklyPayCents as number | null | undefined),
     commission: e.commissionPercent === null || e.commissionPercent === undefined ? '' : String(e.commissionPercent),
     weeklyStipend: centsToInput(e.weeklyStipendCents as number | null | undefined),
+    fee: centsToInput(e.feeCents as number | null | undefined),
     travelProvided: Boolean(e.travelProvided),
     carProvided: Boolean(e.carProvided),
     housingProvided: Boolean(e.housingProvided),

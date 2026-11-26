@@ -12,6 +12,8 @@ const COLUMNS: { key: string; label: string }[] = [
   { key: 'cell', label: 'Cell' },
   { key: 'homeAirport', label: 'Home airport' },
   { key: 'dob', label: 'DOB' },
+  { key: 'homeStreet', label: 'Home address' },
+  { key: 'homeCityStateZip', label: 'City, state, ZIP' },
   { key: 'tsaKtn', label: 'TSA/KTN' },
   { key: 'frequentFlyer', label: 'Frequent flyer' },
 ]

@@ -72,6 +72,13 @@ export const PRODUCTION_FIELDS = {
   opening: 'general',
   closing: 'general',
   performanceSchedule: 'general',
+  // What the union contracts ask about the run.
+  venueName: 'general',
+  venueCapacity: 'general',
+  topTicketCents: 'general',
+  scheduledPerformances: 'general',
+  rehearsalLocation: 'general',
+  rehearsalCallTime: 'general',
 } as const satisfies FieldMap
 
 /** Agents are contact details, per the plan's Contact group ("cell, email, agent"). */
@@ -105,6 +112,8 @@ export const ENGAGEMENT_FIELDS = {
   weeklyPayCents: 'pay_terms',
   commissionPercent: 'pay_terms',
   weeklyStipendCents: 'pay_terms',
+  // A flat fee, for SDC directors and choreographers.
+  feeCents: 'pay_terms',
 } as const satisfies FieldMap
 
 export const CONFLICT_FIELDS = {
@@ -169,6 +178,12 @@ export const productionFields = z.object({
   opening: optionalDate,
   closing: optionalDate,
   performanceSchedule: optionalText(2000),
+  venueName: optionalText(160),
+  venueCapacity: z.number().int().min(1).max(100_000).nullable().optional(),
+  topTicketCents: z.number().int().min(0).max(1_000_000).nullable().optional(),
+  scheduledPerformances: z.number().int().min(1).max(1000).nullable().optional(),
+  rehearsalLocation: optionalText(200),
+  rehearsalCallTime: optionalText(20),
 })
 export const createProductionInput = z
   .object({ seasonId: z.uuid() })
@@ -195,6 +210,7 @@ export const updateAgentInput = z.object({ id: z.uuid() }).extend(agentFields.pa
 export const personFields = z.object({
   legalName: trimmed(160),
   preferredName: optionalText(80),
+  unionMemberId: optionalText(40),
   email: z
     .email()
     .nullable()
@@ -204,6 +220,8 @@ export const personFields = z.object({
   homeAirport: optionalText(8),
   airportPrefs: optionalText(500),
   dob: optionalDate,
+  homeStreet: optionalText(200),
+  homeCityStateZip: optionalText(200),
   tsaKtn: optionalText(40),
   frequentFlyer: optionalText(500),
 })
@@ -220,6 +238,7 @@ const termsBase = z.object({
   // null means no commission.
   commissionPercent: z.number().min(0).max(100).nullable().optional(),
   weeklyStipendCents: cents.nullable().optional(),
+  feeCents: cents.nullable().optional(),
   travelProvided: z.boolean(),
   carProvided: z.boolean(),
   housingProvided: z.boolean(),
