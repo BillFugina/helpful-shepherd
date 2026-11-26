@@ -168,13 +168,16 @@ describe.skipIf(!url)('connector against Postgres', () => {
   })
 
   it('writes an audit event for every call, marked as the connector, without the search text', async () => {
-    const before = new Date()
+    const connectorEvents = () =>
+      db
+        .select()
+        .from(auditEvent)
+        .where(and(eq(auditEvent.actorId, cm.id), eq(auditEvent.recordType, 'connector_tool')))
+    // Compare by row, not by time: the database's clock has microseconds and
+    // Node's doesn't, so an earlier test's call can land in the same millisecond.
+    const seen = new Set((await connectorEvents()).map((r) => r.id))
     await runConnectorTool(env(cm), 'find_people', { name: `Vale ${tag}` })
-    const rows = await db
-      .select()
-      .from(auditEvent)
-      .where(and(eq(auditEvent.actorId, cm.id), eq(auditEvent.recordType, 'connector_tool')))
-    const latest = rows.filter((r) => r.at >= before)
+    const latest = (await connectorEvents()).filter((r) => !seen.has(r.id))
     expect(latest).toHaveLength(1)
     expect(latest[0]).toMatchObject({ action: 'read', via: 'connector' })
     expect(latest[0]!.detail).toMatchObject({ tool: 'find_people', client: clientId, count: 1 })
