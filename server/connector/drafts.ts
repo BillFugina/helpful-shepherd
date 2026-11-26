@@ -72,30 +72,33 @@ export async function createDraft(
   await requireProduction(db, input.productionId)
   const matchedPersonId = await matchPerson(db, proposal.person)
   const matchedAgentId = await matchAgent(db, proposal.agent)
-  const [row] = await db
-    .insert(engagementDraft)
-    .values({
-      productionId: input.productionId,
-      createdBy: user.id,
-      createdVia: 'connector',
-      sourceText: input.emailText,
-      proposal,
-      matchedPersonId,
-      matchedAgentId,
+  // The draft and its audit event commit together.
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(engagementDraft)
+      .values({
+        productionId: input.productionId,
+        createdBy: user.id,
+        createdVia: 'connector',
+        sourceText: input.emailText,
+        proposal,
+        matchedPersonId,
+        matchedAgentId,
+      })
+      .returning({ id: engagementDraft.id })
+    const id = row!.id
+    await recordAudit(tx, {
+      actorId: user.id,
+      actorEmail: user.email,
+      action: 'create',
+      recordType: 'engagement_draft',
+      recordId: id,
+      personId: matchedPersonId ?? undefined,
+      via: 'connector',
+      detail: { productionId: input.productionId, returningPerson: matchedPersonId !== null },
     })
-    .returning({ id: engagementDraft.id })
-  const id = row!.id
-  await recordAudit(db, {
-    actorId: user.id,
-    actorEmail: user.email,
-    action: 'create',
-    recordType: 'engagement_draft',
-    recordId: id,
-    personId: matchedPersonId ?? undefined,
-    via: 'connector',
-    detail: { productionId: input.productionId, returningPerson: matchedPersonId !== null },
+    return { id, matchedPersonId, matchedAgentId }
   })
-  return { id, matchedPersonId, matchedAgentId }
 }
 
 /**

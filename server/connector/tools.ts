@@ -380,13 +380,19 @@ export async function runConnectorTool(env: ToolEnv, name: ConnectorToolName, ra
   }
   try {
     const args = def.input.parse(rawArgs ?? {})
-    const { data, audit } = await def.run(args, env)
-    await recordAudit(env.db, {
-      ...base,
-      recordId: audit?.recordId,
-      personId: audit?.personId,
-      detail: { tool: name, client: env.clientId, ...audit?.detail },
-    })
+    const runAndAudit = async (db: Db) => {
+      const { data, audit } = await def.run(args, { ...env, db })
+      await recordAudit(db, {
+        ...base,
+        recordId: audit?.recordId,
+        personId: audit?.personId,
+        detail: { tool: name, client: env.clientId, ...audit?.detail },
+      })
+      return data
+    }
+    // A write and its audit events commit together, so a failed audit can't
+    // leave a saved draft behind an error (and a retry can't duplicate it).
+    const data = def.readOnly ? await runAndAudit(env.db) : await env.db.transaction((tx) => runAndAudit(tx))
     return { content: [{ type: 'text', text: JSON.stringify(data, null, 1) }] }
   } catch (error) {
     const { text, outcome } = errorText(error)
