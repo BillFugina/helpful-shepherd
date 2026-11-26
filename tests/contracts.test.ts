@@ -243,6 +243,9 @@ describe.skipIf(!url)('contracts against Postgres', () => {
       name: 'Example Theatre',
       street: '1 Main St',
       cityStateZip: 'Raleigh, NC 27601',
+      email: 'company@example.com',
+      signerName: 'Pat Example',
+      ein: '00-0000000',
       unemploymentNumber: 'NC 000',
       equityEmployerAgreement: 'ITC-1',
     })
