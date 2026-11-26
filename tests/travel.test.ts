@@ -6,6 +6,7 @@ import {
   auditEvent,
   engagement,
   flight,
+  housingAssignment,
   housingUnit,
   person,
   production,
@@ -325,5 +326,24 @@ describe.skipIf(!url)('travel and housing against Postgres', () => {
       code: 'BAD_REQUEST',
       message: expect.stringContaining('Move them first'),
     })
+  })
+
+  it('two saves at once can’t give one person overlapping stays in different rooms', async () => {
+    const unit = await asCm().housing.createUnit({ name: `Race house ${tag}`, kind: 'apartment' })
+    units.push(unit.id)
+    const a = await asCm().housing.addRoom({ unitId: unit.id, name: 'A', floor: 1, bathroom: 'A bath' })
+    const b = await asCm().housing.addRoom({ unitId: unit.id, name: 'B', floor: 1, bathroom: 'B bath' })
+    const stay = { engagementId, startsOn: '2032-04-01', endsOn: '2032-04-05' }
+    const results = await Promise.allSettled([
+      asCm().housing.assign({ ...stay, roomId: a.id }),
+      asCm().housing.assign({ ...stay, roomId: b.id }),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((r) => r.status === 'rejected')).toMatchObject({ reason: { code: 'CONFLICT' } })
+
+    // The database refuses it too, even for a write that skips the app's check.
+    await expect(
+      db.insert(housingAssignment).values({ ...stay, roomId: b.id, startsOn: '2032-04-03' }),
+    ).rejects.toMatchObject({ cause: { code: '23P01' } })
   })
 })

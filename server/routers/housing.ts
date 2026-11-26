@@ -30,14 +30,23 @@ const formatNight = (d: string) =>
 
 /**
  * Refuses a stay that shares a night with another stay in the same room, or
- * with another stay of the same person. The room row is locked first, so two
- * people assigning the same room at once can't both win.
+ * with another stay of the same engagement, with a message that names who has
+ * the room. The engagement row and then the room row are locked first (always
+ * in that order), so two saves for the same person or the same room wait for
+ * each other. Exclusion constraints in the database (migration 0005) back
+ * both rules up.
  */
 async function checkStayFree(
   db: Db,
   stay: { roomId: string; engagementId: string; startsOn: string; endsOn: string },
   ignoreId?: string,
 ): Promise<void> {
+  await db
+    .select({ id: engagement.id })
+    .from(engagement)
+    .where(eq(engagement.id, stay.engagementId))
+    .for('update')
+    .limit(1)
   const [room] = await db.select().from(housingRoom).where(eq(housingRoom.id, stay.roomId)).for('update').limit(1)
   if (!room) throw new TRPCError({ code: 'NOT_FOUND', message: 'That room no longer exists.' })
   const overlapping = and(lt(housingAssignment.startsOn, stay.endsOn), gt(housingAssignment.endsOn, stay.startsOn))
