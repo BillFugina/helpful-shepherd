@@ -18,7 +18,10 @@ export function TryDemoButton({ label = 'Try the demo' }: { label?: string }) {
       setError(problem)
       return
     }
-    queryClient.clear()
+    // Drop anything cached for whoever was here before and refetch what's on
+    // screen. clear() alone leaves mounted queries (the home page's `me`)
+    // holding their old signed-out result, so nothing would change.
+    await queryClient.resetQueries()
     await navigate('/')
   }
   return (

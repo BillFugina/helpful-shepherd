@@ -15,8 +15,15 @@ export function Layout() {
 
   async function signOut() {
     await authClient.signOut()
+    if (guest) {
+      // Back to the home page, then refetch it: a guest may already be on it,
+      // and clear() alone would leave its `me` showing the guest.
+      await navigate('/')
+      await queryClient.resetQueries()
+      return
+    }
     queryClient.clear()
-    await navigate(guest ? '/' : '/sign-in')
+    await navigate('/sign-in')
   }
 
   return (
