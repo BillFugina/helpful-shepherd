@@ -275,3 +275,13 @@ export const linkUploadInput = z.object({
   fileName: z.string().trim().min(1).max(200),
   base64: z.string().min(8).max(MAX_BASE64_CHARS),
 })
+
+/**
+ * The forms a reminder asks for: required ones still missing, and ones
+ * Finance sent back with a note. A form already in and waiting isn't nagged for.
+ */
+export function formsToRemind(checklist: readonly ChecklistItem[]): DocumentType[] {
+  return checklist
+    .filter((i) => i.required && (i.status === 'missing' || (i.status === 'received' && Boolean(i.financeNote))))
+    .map((i) => i.documentType)
+}

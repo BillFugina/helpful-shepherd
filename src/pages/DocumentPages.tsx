@@ -7,6 +7,7 @@ import {
   DOCUMENT_STATUS_LABELS,
   DOCUMENT_TYPE_LABELS,
   DOCUMENT_TYPES,
+  formsToRemind,
   MAX_FILE_BYTES,
   OPEN_FOR_UPLOAD,
   type ChecklistItem,
@@ -285,9 +286,34 @@ export function EngagementDocuments({ engagementId }: { engagementId: string }) 
               onChange={refresh}
             />
           ) : null}
+          {formsToRemind(data.data.checklist).length ? (
+            <EngagementReminder engagementId={engagementId} onChange={refresh} />
+          ) : null}
         </>
       ) : null}
     </section>
+  )
+}
+
+function EngagementReminder({ engagementId, onChange }: { engagementId: string; onChange: () => Promise<unknown> }) {
+  const reminders = useReminders(onChange)
+  const [results, setResults] = useState<ReminderResultRow[] | null>(null)
+  if (!reminders.allowed) return null
+  return (
+    <div className="subsection">
+      <h3>Reminder</h3>
+      <p className="muted small">
+        Emails them the forms they still owe, with a fresh upload link.
+        {reminders.mode ? ` ${REMINDER_MODE_TEXT[reminders.mode]}` : ''}
+      </p>
+      <RemindButton
+        engagementIds={[engagementId]}
+        label="Email a reminder"
+        reminders={reminders}
+        onResults={setResults}
+      />
+      {results ? <ReminderResults results={results} onClose={() => setResults(null)} /> : null}
+    </div>
   )
 }
 
@@ -427,18 +453,142 @@ function UploadLinks({
 }
 
 // ---------------------------------------------------------------------------
+// Reminders
+// ---------------------------------------------------------------------------
+
+type ReminderMode = 'log' | 'allowlist' | 'live'
+
+interface ReminderResultRow {
+  engagementId: string
+  name: string
+  outcome: 'sent' | 'logged' | 'held' | 'skipped' | 'failed'
+  reason?: string
+  email?: { to: string; subject: string; text: string }
+}
+
+const REMINDER_MODE_TEXT: Record<ReminderMode, string> = {
+  log: 'Reminders aren’t emailed from here. Each one makes a fresh upload link and shows you the email to send yourself.',
+  allowlist: 'Test mode: reminders are emailed only to addresses on the test list.',
+  live: 'Reminders are emailed for real. Demo people never get one.',
+}
+
+const OUTCOME_LABELS: Record<ReminderResultRow['outcome'], string> = {
+  sent: 'Emailed',
+  logged: 'Ready for you to send',
+  held: 'Not emailed',
+  skipped: 'Skipped',
+  failed: 'Didn’t send',
+}
+
+function useReminders(onDone: () => Promise<unknown>) {
+  const trpc = useTRPC()
+  const can = useCan()
+  const allowed = can('documents', 'edit') && can('contact')
+  const status = useQuery({ ...trpc.documents.reminders.status.queryOptions(), enabled: allowed })
+  const send = useMutation(trpc.documents.reminders.send.mutationOptions({ onSuccess: onDone }))
+  return { allowed, mode: status.data?.mode ?? null, send }
+}
+
+function EmailPreview({ email }: { email: NonNullable<ReminderResultRow['email']> }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <details>
+      <summary>See the email</summary>
+      <p className="small">
+        To: {email.to}
+        <br />
+        Subject: {email.subject}
+      </p>
+      <pre className="email-preview">{email.text}</pre>
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => {
+          void navigator.clipboard.writeText(email.text).then(() => setCopied(true))
+        }}
+      >
+        {copied ? 'Copied' : 'Copy the email'}
+      </button>
+    </details>
+  )
+}
+
+function ReminderResults({ results, onClose }: { results: ReminderResultRow[]; onClose: () => void }) {
+  return (
+    <div className="banner">
+      <ul className="plain">
+        {results.map((r) => (
+          <li key={r.engagementId}>
+            <strong>{r.name || 'Unknown'}</strong>: {OUTCOME_LABELS[r.outcome]}
+            {r.reason ? <span className="muted small"> · {r.reason}</span> : null}
+            {r.email ? <EmailPreview email={r.email} /> : null}
+          </li>
+        ))}
+      </ul>
+      <p className="muted small">
+        Links in emails that weren’t sent still work until they expire. Copy them now: they won’t be shown again.
+      </p>
+      <button type="button" className="link" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  )
+}
+
+function RemindButton({
+  engagementIds,
+  label,
+  reminders,
+  onResults,
+}: {
+  engagementIds: string[]
+  label: string
+  reminders: ReturnType<typeof useReminders>
+  onResults: (r: ReminderResultRow[]) => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <>
+      <button
+        type="button"
+        className="secondary"
+        disabled={reminders.send.isPending || !engagementIds.length}
+        onClick={async () => {
+          setError(null)
+          try {
+            const out = await reminders.send.mutateAsync({ engagementIds })
+            onResults(out.results)
+          } catch (e) {
+            setError(errorText(e))
+          }
+        }}
+      >
+        {reminders.send.isPending ? 'Sending…' : label}
+      </button>
+      {error ? <span className="error small"> {error}</span> : null}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // A production's paperwork
 // ---------------------------------------------------------------------------
 
 export function ProductionDocumentsPage() {
   const { productionId = '' } = useParams()
   const trpc = useTRPC()
+  const queryClient = useQueryClient()
   const data = useQuery(trpc.documents.overview.queryOptions({ productionId }))
+  const reminders = useReminders(() =>
+    queryClient.invalidateQueries({ queryKey: trpc.documents.overview.queryKey({ productionId }) }),
+  )
+  const [results, setResults] = useState<ReminderResultRow[] | null>(null)
   if (data.isPending) return <p className="muted">Loading…</p>
   if (data.error) return <p className="error">{errorText(data.error)}</p>
   const d = data.data
   const outstanding = d.engagements.filter((e) => !e.summary.complete)
   const done = d.engagements.length - outstanding.length
+  const remindable = d.engagements.filter((e) => e.toRemind.length && e.hasEmail).map((e) => e.id)
 
   return (
     <section>
@@ -450,6 +600,22 @@ export function ProductionDocumentsPage() {
         <li className="chip doc-accepted">Complete: {done}</li>
         <li className="chip doc-missing">Still collecting: {outstanding.length}</li>
       </ul>
+      {reminders.allowed ? (
+        <div className="subsection">
+          {reminders.mode ? <p className="muted small">{REMINDER_MODE_TEXT[reminders.mode]}</p> : null}
+          <RemindButton
+            engagementIds={remindable}
+            label={
+              remindable.length
+                ? `Remind ${remindable.length} ${remindable.length === 1 ? 'person' : 'people'} with missing forms`
+                : 'No one to remind'
+            }
+            reminders={reminders}
+            onResults={setResults}
+          />
+          {results ? <ReminderResults results={results} onClose={() => setResults(null)} /> : null}
+        </div>
+      ) : null}
       <div className="table-wrap">
         <table>
           <thead>
@@ -459,6 +625,7 @@ export function ProductionDocumentsPage() {
               <th>Stage</th>
               <th>Forms</th>
               <th>Still open</th>
+              {reminders.allowed ? <th>Reminder</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -484,6 +651,28 @@ export function ProductionDocumentsPage() {
                       </div>
                     ))}
                 </td>
+                {reminders.allowed ? (
+                  <td className="small">
+                    {e.toRemind.length ? (
+                      e.hasEmail ? (
+                        <RemindButton
+                          engagementIds={[e.id]}
+                          label="Remind"
+                          reminders={reminders}
+                          onResults={setResults}
+                        />
+                      ) : (
+                        <span className="muted">No email on file</span>
+                      )
+                    ) : null}
+                    {e.lastReminder ? (
+                      <div className="muted">
+                        Last: {new Date(e.lastReminder.at).toLocaleDateString()}
+                        {e.lastReminder.delivery === 'sent' ? '' : ' (not emailed)'}
+                      </div>
+                    ) : null}
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

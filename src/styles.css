@@ -559,3 +559,12 @@ code.break {
   padding: 12px 0;
   border-top: 1px solid var(--border);
 }
+
+.email-preview {
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  background: var(--chip);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  max-width: 60ch;
+}
