@@ -141,14 +141,16 @@ export function valuesToFreeze(fields: readonly ResolvedField[]): Record<string,
 }
 
 /** What the app shows for a field: Personal ID values stay on the server, only whether they're filled. */
-export function forDisplay(fields: readonly ResolvedField[]) {
+/** What the contract page shows. Personal ID never; Contact values only with Contact access. */
+export function forDisplay(fields: readonly ResolvedField[], opts: { seesContact: boolean }) {
   const blanks = new Set(blankFields(fields).map((f) => f.name))
   return fields.map((f) => ({
     name: f.name,
     label: f.label,
     kind: f.kind,
     options: f.options ? [...f.options] : undefined,
-    value: f.personal ? null : f.value,
+    value: f.personal || (f.contact && !opts.seesContact) ? null : f.value,
+    hidden: f.contact && !opts.seesContact,
     filled: Boolean(f.value.trim()),
     required: f.required,
     personal: f.personal,

@@ -5,6 +5,7 @@ import { filterRecord, levelAtLeast, levelFor, type FieldGroup } from '../../sha
 import {
   blankFields,
   CONTRACT_FIELDS,
+  contactFieldNames,
   FORM_CONTRACT_TYPE,
   markSentInput,
   markSignedInput,
@@ -43,6 +44,9 @@ function requireContractView(grants: Parameters<typeof requireView>[0]) {
   requireView(grants, 'general')
   requireView(grants, 'pay_terms')
 }
+
+type Grants = Parameters<typeof requireView>[0]
+const sees = (grants: Grants, group: FieldGroup) => levelAtLeast(levelFor(grants, group), 'view')
 
 const statusIndex = (s: PipelineStatus) => PIPELINE_STATUSES.indexOf(s)
 
@@ -275,10 +279,22 @@ const templatesRouter = router({
   }),
 })
 
-function contractSummary(row: {
-  contract: typeof contract.$inferSelect
-  template: typeof contractTemplate.$inferSelect
-}) {
+/**
+ * Overrides can hold pay (a typed Compensation, say) or a typed email, so
+ * they go out only with Pay terms, and those typed over Contact fields only
+ * with Contact as well.
+ */
+function visibleOverrides(row: { contract: ContractRow; template: TemplateRow }, grants: Grants) {
+  if (!sees(grants, 'pay_terms')) return undefined
+  if (sees(grants, 'contact')) return row.contract.overrides
+  const contactNames = contactFieldNames({ format: row.template.format as TemplateFormat, body: row.template.body })
+  return Object.fromEntries(Object.entries(row.contract.overrides).filter(([name]) => !contactNames.has(name)))
+}
+
+type ContractRow = typeof contract.$inferSelect
+type TemplateRow = typeof contractTemplate.$inferSelect
+
+function contractSummary(row: { contract: ContractRow; template: TemplateRow }, grants: Grants) {
   return {
     ...filterRecord(
       {
@@ -286,7 +302,7 @@ function contractSummary(row: {
         engagementId: row.contract.engagementId,
         templateId: row.contract.templateId,
         status: row.contract.status,
-        overrides: row.contract.overrides,
+        overrides: visibleOverrides(row, grants),
         sentOn: row.contract.sentOn,
         sentTo: row.contract.sentTo,
         signedOn: row.contract.signedOn,
@@ -340,7 +356,7 @@ export const contractsRouter = router({
       .where(and(eq(contractTemplate.active, true), eq(contractTemplate.contractType, eng.contractType)))
       .orderBy(asc(contractTemplate.name))
     return {
-      contracts: rows.map(contractSummary),
+      contracts: rows.map((r) => contractSummary(r, ctx.grants)),
       toPrepare: templates.filter((t) => !live.has(t.familyId)).map((t) => ({ id: t.id, name: t.name })),
     }
   }),
@@ -395,7 +411,7 @@ export const contractsRouter = router({
     const row = await contractOrThrow(ctx.db, input.id)
     const { fields, context } = await resolvedFields(ctx.db, row)
     return {
-      contract: contractSummary(row),
+      contract: contractSummary(row, ctx.grants),
       engagement: {
         id: context.engagement.id,
         role: context.engagement.role,
@@ -408,7 +424,7 @@ export const contractsRouter = router({
         preferredName: context.person.preferredName,
       },
       production: { id: context.production.id, title: context.production.title, seasonId: context.production.seasonId },
-      fields: forDisplay(fields),
+      fields: forDisplay(fields, { seesContact: sees(ctx.grants, 'contact') }),
       blanks: blankFields(fields).map((f) => f.label),
     }
   }),
@@ -426,11 +442,21 @@ export const contractsRouter = router({
           })
         }
         const template = { format: row.template.format as TemplateFormat, body: row.template.body }
-        for (const [name, value] of Object.entries(input.overrides)) {
+        // Without Contact access the page never saw what was typed over a
+        // Contact field, so those stay as they were.
+        let overrides = input.overrides
+        if (!sees(ctx.grants, 'contact')) {
+          const contactNames = contactFieldNames(template)
+          overrides = Object.fromEntries([
+            ...Object.entries(input.overrides).filter(([name]) => !contactNames.has(name)),
+            ...Object.entries(row.contract.overrides).filter(([name]) => contactNames.has(name)),
+          ])
+        }
+        for (const [name, value] of Object.entries(overrides)) {
           const problem = overrideProblem(template, name, value)
           if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem })
         }
-        await tx.update(contract).set({ overrides: input.overrides }).where(eq(contract.id, input.id))
+        await tx.update(contract).set({ overrides }).where(eq(contract.id, input.id))
         const [eng] = await tx
           .select({ personId: engagement.personId })
           .from(engagement)
@@ -442,7 +468,7 @@ export const contractsRouter = router({
           personId: eng?.personId,
           keys: ['overrides'],
           fields: CONTRACT_FIELDS,
-          detail: { names: Object.keys(input.overrides) },
+          detail: { names: Object.keys(overrides) },
         })
         return { id: input.id }
       }),
@@ -450,8 +476,9 @@ export const contractsRouter = router({
   }),
 
   /**
-   * The filled PDF. It carries the person's home address and pay, so it needs
-   * Personal ID and Pay terms as well as Contracts, and every download is logged.
+   * The filled PDF. It carries the person's home address, email and pay, so it
+   * needs Personal ID, Contact and Pay terms as well as Contracts (each only when
+   * the form uses it), and every download is logged.
    */
   download: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
     requireContractView(ctx.grants)
@@ -459,6 +486,8 @@ export const contractsRouter = router({
     const { fields, context } = await resolvedFields(ctx.db, row)
     const personal = fields.some((f) => f.personal && f.value)
     if (personal) requireView(ctx.grants, 'personal_id')
+    const contact = fields.some((f) => f.contact && f.value)
+    if (contact) requireView(ctx.grants, 'contact')
     let bytes: Uint8Array
     try {
       if (row.template.format === 'text') {
@@ -471,7 +500,12 @@ export const contractsRouter = router({
       if (error instanceof FormError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message })
       throw error
     }
-    const groups: FieldGroup[] = ['contracts', 'pay_terms', ...(personal ? (['personal_id'] as const) : [])]
+    const groups: FieldGroup[] = [
+      'contracts',
+      'pay_terms',
+      ...(personal ? (['personal_id'] as const) : []),
+      ...(contact ? (['contact'] as const) : []),
+    ]
     for (const fieldGroup of groups) {
       await recordAudit(ctx.db, {
         actorId: ctx.user.id,
@@ -640,10 +674,10 @@ export const contractsRouter = router({
     const byEngagement = new Map<string, ReturnType<typeof contractSummary>[]>()
     for (const r of rows) {
       const list = byEngagement.get(r.contract.engagementId) ?? []
-      list.push(contractSummary(r))
+      list.push(contractSummary(r, ctx.grants))
       byEngagement.set(r.contract.engagementId, list)
     }
-    const seesPeople = levelAtLeast(levelFor(ctx.grants, 'general'), 'view')
+    const seesPeople = sees(ctx.grants, 'general')
     return {
       production: prod,
       today: theatreToday(),

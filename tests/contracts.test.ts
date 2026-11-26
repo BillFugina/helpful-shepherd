@@ -12,6 +12,7 @@ import {
   engagement,
   person,
   production,
+  roleGrant,
   season,
   user,
   userRole,
@@ -19,7 +20,7 @@ import {
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
 import { createCallerFactory, type SessionUser } from '../server/trpc.js'
-import type { Role } from '../shared/access.js'
+import type { AccessLevel, FieldGroup, Role } from '../shared/access.js'
 import {
   blankFields,
   mergeBody,
@@ -96,6 +97,10 @@ describe('contract fill rules', () => {
 
   it('a text template knows its tokens and leaves blanks visible', () => {
     expect(unknownTokens('Hi {{employee.name}} and {{nope}}')).toEqual(['nope'])
+    // Names every object has are not tokens.
+    expect(unknownTokens('{{constructor}} {{hasownproperty}}')).toEqual(['constructor', 'hasownproperty'])
+    expect(resolveContract({ format: 'text', body: '{{constructor}}' }, CONTEXT, {})).toEqual([])
+    expect(overrideProblem({ format: 'text', body: '{{constructor}}' }, 'constructor', 'x')).not.toBeNull()
     expect(mergeBody('Pay: {{weekly_pay}}', { weekly_pay: '' })).toBe('Pay: ________')
   })
 
@@ -105,6 +110,12 @@ describe('contract fill rules', () => {
     expect(overrideProblem({ format: 'equity_itc_form', body: null }, 'EmployeeAddress', 'x')).toMatch(/profile/)
     expect(overrideProblem({ format: 'sdc_form', body: null }, 'Tier', '3')).toMatch(/venue numbers/)
     expect(overrideProblem({ format: 'equity_itc_form', body: null }, 'Duty', 'Chorus')).toBeNull()
+  })
+
+  it('leaves SDC membership for a person to tick, since the member ID may be Equity’s', () => {
+    const fields = resolveContract({ format: 'sdc_form', body: null }, CONTEXT, {})
+    expect(fields.filter((f) => f.name.startsWith('Check Box')).map((f) => f.value)).toEqual(['', ''])
+    expect(fields.find((f) => f.name === 'Email Address')).toMatchObject({ contact: true })
   })
 
   it('fills a form and keeps it fillable', async () => {
@@ -366,5 +377,47 @@ describe.skipIf(!url)('contracts against Postgres', () => {
     expect(after.map((c) => c.status).sort()).toEqual(['draft', 'void'])
     const status = await asFinance().contracts.byProduction({ productionId })
     expect(status.engagements.find((e) => e.id === directorId)?.contracts).toHaveLength(1)
+  })
+
+  /** Runs a step with one role's grant on one group changed, then puts it back. */
+  async function withGrant(role: Role, group: FieldGroup, level: AccessLevel, run: () => Promise<void>) {
+    const where = and(eq(roleGrant.role, role), eq(roleGrant.fieldGroup, group))
+    const [before] = await db.select({ level: roleGrant.level }).from(roleGrant).where(where)
+    await db.update(roleGrant).set({ level }).where(where)
+    try {
+      await run()
+    } finally {
+      await db.update(roleGrant).set({ level: before!.level }).where(where)
+    }
+  }
+
+  it('keeps email and typed pay behind Contact and Pay terms', async () => {
+    const [sdc] = (await contractsOf(directorId)).filter((c) => c.status === 'draft')
+    await asCm().contracts.setOverrides({
+      id: sdc!.id,
+      overrides: { 'Email Address': 'typed@example.com', 'Check Box1': 'yes' },
+    })
+
+    await withGrant('finance_manager', 'contact', 'none', async () => {
+      const detail = await asFinance().contracts.get({ id: sdc!.id })
+      expect(detail.fields.find((f) => f.name === 'Email Address')).toMatchObject({ value: null, hidden: true })
+      expect(detail.contract.overrides).toEqual({ 'Check Box1': 'yes' })
+      await expect(asFinance().contracts.download({ id: sdc!.id })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    await withGrant('finance_manager', 'pay_terms', 'none', async () => {
+      const status = await asFinance().contracts.byProduction({ productionId })
+      const listed = status.engagements.find((e) => e.id === directorId)?.contracts[0]
+      expect(listed?.overrides).toBeUndefined()
+      const forDeal = await asFinance().contracts.forEngagement({ engagementId: directorId })
+      expect(forDeal.contracts.every((c) => c.overrides === undefined)).toBe(true)
+    })
+
+    // Saving without Contact access keeps what was typed over a Contact field.
+    await withGrant('company_manager', 'contact', 'none', async () => {
+      await asCm().contracts.setOverrides({ id: sdc!.id, overrides: { 'Check Box2': 'yes' } })
+    })
+    const [saved] = await db.select({ overrides: contract.overrides }).from(contract).where(eq(contract.id, sdc!.id))
+    expect(saved!.overrides).toEqual({ 'Check Box2': 'yes', 'Email Address': 'typed@example.com' })
   })
 })

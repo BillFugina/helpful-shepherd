@@ -288,6 +288,8 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
                   <td>
                     {f.personal ? (
                       <span className="muted">{f.filled ? 'On file (from their profile)' : 'Not on file'}</span>
+                    ) : f.hidden ? (
+                      <span className="muted">{f.filled ? 'On file (needs Contact access)' : 'Not on file'}</span>
                     ) : f.value ? (
                       f.value
                     ) : (
@@ -301,6 +303,8 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
                         <Link className="small" to={`/people/${d.person.id}`}>
                           Edit on profile
                         </Link>
+                      ) : f.hidden ? (
+                        <span className="muted small">Needs Contact access</span>
                       ) : f.computed ? (
                         <span className="muted small">From the venue numbers</span>
                       ) : f.kind === 'choice' ? (

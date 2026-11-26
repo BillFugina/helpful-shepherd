@@ -396,13 +396,15 @@ export interface FormField {
   personal?: boolean
   /** Worked out by the app (the SDC tier math); can't be typed over. */
   computed?: boolean
+  /** From the person's Contact group (email, cell): shown and printed only with Contact access. */
+  contact?: boolean
 }
 
 const text = (
   name: string,
   label: string,
   value: FormField['value'],
-  opts: Partial<Pick<FormField, 'required' | 'personal' | 'computed'>> = {},
+  opts: Partial<Pick<FormField, 'required' | 'personal' | 'computed' | 'contact'>> = {},
 ): FormField => ({ name, label, kind: 'text', value, required: opts.required ?? true, ...opts })
 
 export const ITC_FIELDS: readonly FormField[] = [
@@ -444,7 +446,7 @@ export const ITC_FIELDS: readonly FormField[] = [
   text('EmployeeCityStateZip', 'Employee city, state, ZIP', (c) => c.person.homeCityStateZip ?? '', {
     personal: true,
   }),
-  text('EmployeeEmail', 'Employee email', (c) => c.person.email ?? ''),
+  text('EmployeeEmail', 'Employee email', (c) => c.person.email ?? '', { contact: true }),
   text('MemberIDorSSN', 'Equity member ID', (c) => c.person.unionMemberId ?? ''),
 ]
 
@@ -503,20 +505,22 @@ export const SDC_FIELDS: readonly FormField[] = [
   text('Address 1', 'Artist home address', (c) => c.person.homeStreet ?? '', { personal: true }),
   text('Address 2', 'Artist city and state', (c) => splitZip(c.person.homeCityStateZip).rest, { personal: true }),
   text('Zip', 'Artist ZIP', (c) => splitZip(c.person.homeCityStateZip).zip, { personal: true }),
-  text('Phone', 'Artist phone', (c) => c.person.cell ?? '', { required: false }),
-  text('Email Address', 'Artist email', (c) => c.person.email ?? ''),
+  text('Phone', 'Artist phone', (c) => c.person.cell ?? '', { required: false, contact: true }),
+  text('Email Address', 'Artist email', (c) => c.person.email ?? '', { contact: true }),
+  // The member ID on file may be Equity's, so it can't say whether someone is
+  // in SDC. Both boxes start unticked; the company manager ticks one.
   {
     name: 'Check Box1',
     label: 'SDC member: yes',
     kind: 'checkbox',
-    value: (c) => (c.person.unionMemberId ? 'yes' : ''),
+    value: () => '',
     required: false,
   },
   {
     name: 'Check Box2',
     label: 'SDC member: no',
     kind: 'checkbox',
-    value: (c) => (c.person.unionMemberId ? '' : 'yes'),
+    value: () => '',
     required: false,
   },
   text('Please print name_2', 'Signing for the theatre (print)', (c) => c.employer.signerName ?? ''),
@@ -555,13 +559,15 @@ export const SIGNATURE_FIELDS: Record<FormFormat, readonly string[]> = {
 export interface TemplateToken {
   label: string
   value: (c: ContractContext) => string
+  /** From the person's Contact group: shown and printed only with Contact access. */
+  contact?: boolean
 }
 
 /** What a text template can say with {{token}}. Personal ID never goes in a text template. */
 export const TEXT_TOKENS: Record<string, TemplateToken> = {
   'employee.name': { label: 'Employee name', value: (c) => c.person.legalName },
   'employee.member_id': { label: 'Union member ID', value: (c) => c.person.unionMemberId ?? '' },
-  'employee.email': { label: 'Employee email', value: (c) => c.person.email ?? '' },
+  'employee.email': { label: 'Employee email', value: (c) => c.person.email ?? '', contact: true },
   role: { label: 'Role', value: (c) => c.engagement.role },
   production: { label: 'Production', value: (c) => c.production.title },
   season: { label: 'Season', value: (c) => c.season.name },
@@ -594,8 +600,13 @@ export function tokensIn(body: string): string[] {
   return [...seen]
 }
 
+/** A real token, not something every object has (like constructor or toString). */
+export function isToken(name: string): boolean {
+  return Object.hasOwn(TEXT_TOKENS, name)
+}
+
 export function unknownTokens(body: string): string[] {
-  return tokensIn(body).filter((t) => !(t in TEXT_TOKENS))
+  return tokensIn(body).filter((t) => !isToken(t))
 }
 
 export function mergeBody(body: string, values: Record<string, string>): string {
@@ -616,6 +627,7 @@ export interface ResolvedField {
   required: boolean
   personal: boolean
   computed: boolean
+  contact: boolean
   overridden: boolean
 }
 
@@ -629,7 +641,7 @@ export function resolveContract(
 ): ResolvedField[] {
   if (template.format === 'text') {
     return tokensIn(template.body ?? '')
-      .filter((t) => t in TEXT_TOKENS)
+      .filter(isToken)
       .map((t) => {
         const token = TEXT_TOKENS[t]!
         const typed = overrides[t]
@@ -641,6 +653,7 @@ export function resolveContract(
           required: true,
           personal: false,
           computed: false,
+          contact: Boolean(token.contact),
           overridden: typed !== undefined,
         }
       })
@@ -656,9 +669,18 @@ export function resolveContract(
       required: f.required,
       personal: Boolean(f.personal),
       computed: Boolean(f.computed),
+      contact: Boolean(f.contact),
       overridden: typed !== undefined,
     }
   })
+}
+
+/** The fields or tokens of a template that come from the person's Contact group. */
+export function contactFieldNames(template: { format: TemplateFormat; body: string | null }): Set<string> {
+  if (template.format === 'text') {
+    return new Set(tokensIn(template.body ?? '').filter((t) => isToken(t) && TEXT_TOKENS[t]!.contact))
+  }
+  return new Set(FORM_FIELDS[template.format].filter((f) => f.contact).map((f) => f.name))
 }
 
 /** Required fields that would go out blank. A contract can't be marked sent until this is empty. */
@@ -677,7 +699,7 @@ export function overrideProblem(
   value: string,
 ): string | null {
   if (template.format === 'text') {
-    return tokensIn(template.body ?? '').includes(name) && name in TEXT_TOKENS ? null : `This template has no ${name}.`
+    return tokensIn(template.body ?? '').includes(name) && isToken(name) ? null : `This template has no ${name}.`
   }
   const field = FORM_FIELDS[template.format].find((f) => f.name === name)
   if (!field) return `This form has no field named ${name}.`
