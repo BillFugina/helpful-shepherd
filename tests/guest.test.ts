@@ -4,9 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encryptField, fieldKey } from '../server/crypto/fields.js'
 import { createDb, type Db } from '../server/db/client.js'
 import { auditEvent, person, rateLimit, session } from '../server/db/schema.js'
-import { ensureGuestUser } from '../server/demo/guest.js'
+import { ensureGuestUser, guestDemoClosed } from '../server/demo/guest.js'
 import { replayFlight } from '../server/flights/replay.js'
 import { simulateStatus } from '../server/flights/provider.js'
+import { resetEnvForTests } from '../server/env.js'
 import { createContext, handleAuth } from '../server/handlers.js'
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
@@ -134,6 +135,7 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
       .values({
         legalName: `Guest Test ${randomUUID()}`,
         email: 'guest.test@example.com',
+        isDemo: true,
         dobEnc: encryptField('1990-01-02', 'person.dob', key),
         tsaKtnEnc: encryptField('TT8888888', 'person.tsa_ktn', key),
       })
@@ -198,6 +200,42 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
     )
     await db.update(session).set({ createdAt: old }).where(inArray(session.id, ids))
     expect((await contextFor(cookie)).user).toBeNull()
+  })
+
+  it('a real record closes the demo, for sign-in and for open guest sessions', async () => {
+    await db.delete(rateLimit)
+    const cookie = cookieFrom(await post('/demo/guest', {}))
+    const [real] = await db
+      .insert(person)
+      .values({ legalName: `Real Person ${randomUUID()}`, email: 'real.person@example.com' })
+      .returning({ id: person.id })
+    try {
+      expect(await guestDemoClosed(db)).toBe('real_data')
+      const ctx = await contextFor(cookie)
+      await expect(createCaller(ctx).people.list()).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'DEMO_CLOSED' })
+      expect((await post('/demo/guest', {})).status).toBe(503)
+    } finally {
+      await db.delete(person).where(eq(person.id, real!.id))
+    }
+    expect(await guestDemoClosed(db)).toBeNull()
+    expect(await createCaller({ db, user: guest }).people.list()).not.toHaveLength(0)
+  })
+
+  it('DEMO_GUEST=off closes open guest sessions too', async () => {
+    await db.delete(rateLimit)
+    const cookie = cookieFrom(await post('/demo/guest', {}))
+    const before = process.env.DEMO_GUEST
+    process.env.DEMO_GUEST = 'off'
+    resetEnvForTests()
+    try {
+      const ctx = await contextFor(cookie)
+      await expect(createCaller(ctx).people.list()).rejects.toMatchObject({ message: 'DEMO_CLOSED' })
+      expect((await post('/demo/guest', {})).status).toBe(404)
+    } finally {
+      if (before === undefined) delete process.env.DEMO_GUEST
+      else process.env.DEMO_GUEST = before
+      resetEnvForTests()
+    }
   })
 
   it('rate-limits Try the demo per visitor', async () => {

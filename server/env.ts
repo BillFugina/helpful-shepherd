@@ -25,6 +25,11 @@ export function env(): Env {
   return cached
 }
 
+/** Tests that change process.env call this so the next env() reads it again. */
+export function resetEnvForTests(): void {
+  cached = undefined
+}
+
 /** The public origin this deployment answers on. */
 export function appOrigin(e: Env = env()): string {
   if (e.BETTER_AUTH_URL) return e.BETTER_AUTH_URL

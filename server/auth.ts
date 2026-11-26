@@ -111,7 +111,7 @@ function createAuth() {
         clientPrivileges: () => false,
       }),
       // The public guest demo's sign-in (server/demo/guest.ts).
-      demoGuest({ db, enabled: () => e.DEMO_GUEST !== 'off' }),
+      demoGuest({ db }),
     ],
     hooks: {
       // Only staff with 2FA on can connect an app. The consent page checks

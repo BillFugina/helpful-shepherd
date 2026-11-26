@@ -12,6 +12,7 @@ import {
 } from '../shared/access.js'
 import { loadAccess } from './access.js'
 import type { Db } from './db/client.js'
+import { guestDemoClosed } from './demo/guest.js'
 
 export interface SessionUser {
   id: string
@@ -47,6 +48,7 @@ export const FORBIDDEN_REASONS = {
   adminOnly: 'ADMIN_ONLY',
   readOnlyConnector: 'CONNECTOR_READ_ONLY',
   demoReadOnly: 'DEMO_READ_ONLY',
+  demoClosed: 'DEMO_CLOSED',
 } as const
 
 const t = initTRPC.context<Context>().create({
@@ -86,6 +88,10 @@ export const staffProcedure = protectedProcedure.use(async ({ ctx, next, type })
   if (isGuestUserId(ctx.user.id)) {
     if (ctx.via === 'connector' || type !== 'query') {
       throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.demoReadOnly })
+    }
+    // Turned off, or the database holds real records: closed for open guest sessions too.
+    if (await guestDemoClosed(ctx.db)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.demoClosed })
     }
     return next({ ctx: { ...ctx, role: GUEST_ROLE as ViewerRole, grants: GUEST_GRANTS, guest: true } })
   }
