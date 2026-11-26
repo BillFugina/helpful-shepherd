@@ -498,3 +498,10 @@ legend {
   align-items: center;
   gap: 1rem;
 }
+
+.demo-banner.guest {
+  border-color: var(--accent);
+}
+ol.tour li {
+  margin-bottom: 8px;
+}

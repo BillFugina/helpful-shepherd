@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { z } from 'zod'
+import { TryDemoButton } from '../components/TryDemoButton'
 import { authClient } from '../lib/auth-client'
 
 const credentials = z.object({
@@ -104,6 +105,12 @@ export function SignInPage() {
         {error ? <span className="error">{error}</span> : null}
       </form>
       <p className="muted">Staff accounts only. The Company Manager creates them.</p>
+      {connecting ? null : (
+        <div className="card">
+          <p>Just looking? Open the whole app as a read-only guest, with made-up data and no sign-up.</p>
+          <TryDemoButton />
+        </div>
+      )}
     </section>
   )
 }

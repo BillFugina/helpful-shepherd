@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { ADMIN_ROLE } from '../../shared/access'
 import { PIPELINE_LABELS } from '../../shared/roster'
 import { addDays, THEATRE_AIRPORT, zonedToUtc } from '../../shared/time'
+import { loadGuestClock, saveGuestClock } from '../lib/demo'
 import { errorText } from '../lib/errors'
 import { formatDate, useCan } from '../lib/fields'
 import {
@@ -30,12 +32,38 @@ type Alert = Board['alerts'][number]
  */
 export function ArrivalsPage() {
   const trpc = useTRPC()
+  const me = useMe()
   const [params, setParams] = useSearchParams()
   const date = params.get('date') ?? undefined
+  // A guest has a demo clock of their own, kept in this tab. Null until it's
+  // first set; 0 means real time.
+  const guest = me.data?.guest === true
+  const [guestClock, setGuestClockState] = useState<number | null>(() => loadGuestClock())
+  const setGuestClock = (offsetMs: number) => {
+    saveGuestClock(offsetMs)
+    setGuestClockState(offsetMs)
+  }
   const board = useQuery({
-    ...trpc.arrivals.board.queryOptions({ date }),
+    ...trpc.arrivals.board.queryOptions({
+      date,
+      ...(guest && guestClock !== null ? { clockOffsetMs: guestClock } : {}),
+    }),
+    enabled: !me.isPending,
     refetchInterval: 60_000,
   })
+
+  // A guest's first look starts at noon on the first travel day, when some
+  // flights have landed, some are in the air and the feed has news.
+  const firstTravelDay = board.data?.firstTravelDay
+  useEffect(() => {
+    if (!guest || guestClock !== null || !firstTravelDay) return
+    const offsetMs = zonedToUtc(`${firstTravelDay}T12:00`, THEATRE_TZ).getTime() - Date.now()
+    saveGuestClock(offsetMs)
+    // Runs once, after the first board says which day to start on; the clock
+    // depends on the real time when it's set, so it can't be worked out in render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGuestClockState(offsetMs)
+  }, [guest, guestClock, firstTravelDay])
 
   if (board.isPending) return <p className="muted">Loading…</p>
   if (board.error) return <p className="error">{errorText(board.error)}</p>
@@ -63,7 +91,7 @@ export function ArrivalsPage() {
         </div>
       </div>
 
-      {b.clock.usesDemoClock ? <DemoClock board={b} /> : null}
+      {b.clock.usesDemoClock ? <DemoClock board={b} own={guest ? setGuestClock : null} /> : null}
       <Alerts alerts={b.alerts} />
 
       {empty ? (
@@ -316,8 +344,11 @@ function Alerts({ alerts }: { alerts: Alert[] }) {
 /**
  * Lets the Company Manager replay a travel day with the simulated feed. Moving
  * the clock clears what the feed said before; the board fills in again.
+ *
+ * A guest gets the same buttons on a clock of their own (`own`), which only
+ * changes what their board asks the server for, so nobody else's board moves.
  */
-function DemoClock({ board: b }: { board: Board }) {
+function DemoClock({ board: b, own }: { board: Board; own: ((offsetMs: number) => void) | null }) {
   const trpc = useTRPC()
   const me = useMe()
   const queryClient = useQueryClient()
@@ -326,19 +357,20 @@ function DemoClock({ board: b }: { board: Board }) {
   const resetClock = useMutation(trpc.arrivals.resetClock.mutationOptions({ onSuccess: refresh }))
   const busy = setClock.isPending || resetClock.isPending
   const moved = b.clock.offsetMs !== 0
-  const jumpTo = (date: string) => setClock.mutate({ at: zonedToUtc(`${date}T06:00`, THEATRE_TZ).toISOString() })
-  const forward = (hours: number) =>
-    setClock.mutate({ at: new Date(b.now.getTime() + hours * 3_600_000).toISOString() })
+  const moveTo = (at: Date) => (own ? own(at.getTime() - Date.now()) : setClock.mutate({ at: at.toISOString() }))
+  const jumpTo = (date: string) => moveTo(zonedToUtc(`${date}T06:00`, THEATRE_TZ))
+  const forward = (hours: number) => moveTo(new Date(b.now.getTime() + hours * 3_600_000))
+  const backToRealTime = () => (own ? own(0) : resetClock.mutate())
   const travelDay = b.arrivals.length || b.departures.length ? b.date : (b.nextTravelDay ?? b.firstTravelDay)
 
   return (
     <div className="card demo-clock">
       <p className="small">
-        <strong>Demo clock:</strong> the feed thinks it's {dayAt(b.now, THEATRE_AIRPORT)},{' '}
+        <strong>{own ? 'Your demo clock' : 'Demo clock'}:</strong> the feed thinks it's {dayAt(b.now, THEATRE_AIRPORT)},{' '}
         {timeAt(b.now, THEATRE_AIRPORT)}
-        {moved ? '' : ' (real time)'}.
+        {moved ? '' : ' (real time)'}.{own ? ' Only your board follows it.' : ''}
       </p>
-      {me.data?.role === ADMIN_ROLE ? (
+      {own || me.data?.role === ADMIN_ROLE ? (
         <div className="actions">
           {travelDay ? (
             <button type="button" disabled={busy} onClick={() => jumpTo(travelDay)}>
@@ -353,7 +385,7 @@ function DemoClock({ board: b }: { board: Board }) {
               <button type="button" className="secondary" disabled={busy} onClick={() => forward(3)}>
                 +3 hours
               </button>
-              <button type="button" className="link" disabled={busy} onClick={() => resetClock.mutate()}>
+              <button type="button" className="link" disabled={busy} onClick={backToRealTime}>
                 Back to real time
               </button>
             </>

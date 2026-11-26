@@ -3,9 +3,11 @@ import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api'
 import { jwt, twoFactor } from 'better-auth/plugins'
+import { isGuestUserId } from '../shared/access.js'
 import { loadAccess } from './access.js'
 import { recordAudit } from './audit.js'
 import { db, schema } from './db/client.js'
+import { demoGuest, GUEST_AUTH_PATHS, GUEST_SIGN_IN_PATH } from './demo/guest.js'
 import { appOrigin, env } from './env.js'
 
 export const APP_NAME = 'Theatre Raleigh'
@@ -76,6 +78,8 @@ function createAuth() {
         '/two-factor/*': { window: 60, max: 5 },
         // Open registration is how Claude introduces itself; keep it from being a firehose.
         '/oauth2/register': { window: 60, max: 10 },
+        // "Try the demo" makes a session per tap; keep one visitor from piling them up.
+        [GUEST_SIGN_IN_PATH]: { window: 60, max: 5 },
       },
     },
     plugins: [
@@ -106,11 +110,22 @@ function createAuth() {
         // staff can't create, list, change or delete OAuth clients.
         clientPrivileges: () => false,
       }),
+      // The public guest demo's sign-in (server/demo/guest.ts).
+      demoGuest({ db, enabled: () => e.DEMO_GUEST !== 'off' }),
     ],
     hooks: {
       // Only staff with 2FA on can connect an app. The consent page checks
       // too, but this is the gate that counts.
       before: createAuthMiddleware(async (ctx) => {
+        // The guest account is shared by every visitor, so a guest session can
+        // only read itself and sign out: no listing or revoking sessions, no
+        // account changes, no two-factor setup, no connecting an app.
+        if (!GUEST_AUTH_PATHS.has(ctx.path)) {
+          const current = await getSessionFromCtx(ctx)
+          if (current && isGuestUserId(current.user.id)) {
+            throw new APIError('FORBIDDEN', { message: 'The guest demo is read-only.' })
+          }
+        }
         if (ctx.path !== '/oauth2/consent') return
         const body = ctx.body as { accept?: unknown } | undefined
         if (body?.accept !== true) return
@@ -144,6 +159,9 @@ function createAuth() {
           // A session exists only after the second factor (when it's on), so
           // this logs completed sign-ins.
           after: async (session) => {
+            // Guest demo sessions aren't logged: anyone can start one, and the
+            // audit log is append-only, so they'd bury the staff sign-ins.
+            if (isGuestUserId(session.userId)) return
             await recordAudit(db(), { actorId: session.userId, action: 'sign_in' })
           },
         },

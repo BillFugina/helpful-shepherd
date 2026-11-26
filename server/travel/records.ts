@@ -104,3 +104,18 @@ export function travelDates(
     leavesOn: leaves ? localDate(leaves, THEATRE_TZ) : undefined,
   }
 }
+
+/**
+ * The guest demo doesn't show how to get into a place: door codes and access
+ * notes are made up, but a public page still shouldn't list them.
+ */
+export function withoutAccessForGuest<T extends { doorCode?: unknown; accessNotes?: unknown }>(
+  unit: T,
+  guest: boolean,
+): T {
+  if (!guest) return unit
+  const rest = { ...unit }
+  delete rest.doorCode
+  delete rest.accessNotes
+  return rest
+}

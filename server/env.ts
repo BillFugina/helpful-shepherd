@@ -5,6 +5,8 @@ const schema = z.object({
   BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),
   // 32 random bytes, base64url. Encrypts DOB and travel IDs before they reach the database.
   FIELD_ENCRYPTION_KEY: z.string().optional(),
+  // The public "Try the demo" guest sign-in. On unless set to off.
+  DEMO_GUEST: z.enum(['on', 'off']).optional(),
   // Optional: defaults to the Vercel deployment URL, or localhost in dev.
   BETTER_AUTH_URL: z.url().optional(),
   VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),

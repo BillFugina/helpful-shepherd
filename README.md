@@ -89,6 +89,26 @@ phone push alerts and an "arriving tomorrow" summary. Here the tracker runs
 when someone looks at the board, throttled to once a minute per flight. The
 scheduled job needs an Inngest account and push keys.
 
+## Guest demo
+
+Anyone can look around the whole app without an account: **Try the demo** on
+the sign-in page, or the `/demo` link, signs them in as a shared read-only
+guest.
+
+- **No password, no second factor**, a two-hour session that isn't extended.
+  Staff logins are unchanged and still need two-factor.
+- **Read-only on the server.** Every change is refused (`DEMO_READ_ONLY`), the
+  connector refuses the guest, and the guest can't list sessions, edit the
+  account or turn on two-factor.
+- **Fixed, view-only access** (`GUEST_GRANTS` in `shared/access.ts`): never
+  dates of birth, travel IDs, tax or bank details, door codes, access notes or
+  contract PDF downloads, and no admin screens.
+- **Own demo clock.** Each guest moves time on the Arrivals board without
+  changing it for anyone else; their board replays the simulated feed in memory.
+- **Free-tier guardrails:** 5 starts a minute per visitor, at most 1000 live
+  guest sessions, expired ones cleaned up, and guest sign-ins kept out of the
+  audit log. Set `DEMO_GUEST=off` to turn it off.
+
 ## Local setup
 
 ```sh

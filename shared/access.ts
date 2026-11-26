@@ -103,6 +103,47 @@ export const DEFAULT_GRANTS: Record<Role, Grants> = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// The public guest demo. A visitor taps "Try the demo" and is signed in as one
+// shared guest account with no password. The guest isn't a staff role: it has
+// no row in user_role, its grants are fixed here (the Access screen can't
+// widen them), it can only read, and it never sees the masked groups.
+// ---------------------------------------------------------------------------
+
+export const GUEST_ROLE = 'guest' as const
+export type ViewerRole = Role | typeof GUEST_ROLE
+
+export const VIEWER_ROLE_LABELS: Record<ViewerRole, string> = { ...ROLE_LABELS, guest: 'Demo guest' }
+
+/** The guest account's fixed id. Better Auth makes random ids, so no staff account can have this one. */
+export const GUEST_USER_ID = 'demo-guest'
+/** .invalid can never receive mail, and the account has no password to sign in with. */
+export const GUEST_EMAIL = 'guest@demo.invalid'
+
+/** How long one "Try the demo" lasts. The session isn't refreshed; tap the button again for another. */
+export const GUEST_SESSION_SECONDS = 2 * 60 * 60
+
+/**
+ * What a guest can see: the roster, contacts, pay, contracts, travel and
+ * housing, read-only. Never Personal ID, Travel ID or Tax and bank docs.
+ */
+export const GUEST_GRANTS: Grants = {
+  general: 'view',
+  contact: 'view',
+  pay_terms: 'view',
+  contracts: 'view',
+  travel_logistics: 'view',
+  housing_access: 'view',
+  comps: 'view',
+}
+
+/** The groups a guest must never reach, whatever GUEST_GRANTS says. Checked by the tests. */
+export const NEVER_FOR_GUEST: ReadonlySet<FieldGroup> = new Set(['personal_id', 'travel_id', 'tax_bank'])
+
+export function isGuestUserId(userId: string | null | undefined): boolean {
+  return userId === GUEST_USER_ID
+}
+
 export function levelFor(grants: Grants, group: FieldGroup): AccessLevel {
   return grants[group] ?? 'none'
 }

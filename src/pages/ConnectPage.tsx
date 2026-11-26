@@ -35,6 +35,7 @@ export function ConnectPage() {
   if (!clientId || !params.get('sig')) {
     return <p>This page opens when an app asks to connect to your account. Start from the app.</p>
   }
+  if (me.data.guest) return <p>The guest demo can't connect apps. Staff connect Claude from their own account.</p>
   if (!me.data.twoFactorEnabled) {
     return (
       <p>

@@ -11,6 +11,7 @@ import {
   type OrganizationValues,
 } from '../../shared/contracts'
 import { CONTRACT_OPTIONS, displayName, formatDate, useCan } from '../lib/fields'
+import { useMe } from '../lib/useMe'
 import { CONTRACT_TYPE_LABELS, PIPELINE_LABELS, type ContractType } from '../../shared/roster'
 import { errorText } from '../lib/errors'
 import { useTRPC } from '../lib/trpc'
@@ -115,6 +116,7 @@ export function ContractPage() {
 function ContractView({ detail: d }: { detail: ContractDetail }) {
   const trpc = useTRPC()
   const can = useCan()
+  const guest = useMe().data?.guest === true
   const queryClient = useQueryClient()
   const c = d.contract
   const status = c.status ?? 'draft'
@@ -180,6 +182,7 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
         <button
           type="button"
           className="secondary"
+          hidden={guest}
           disabled={download.isPending || dirty}
           title={dirty ? 'Save your changes first' : undefined}
           onClick={async () => {
@@ -202,7 +205,11 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
           </button>
         ) : null}
       </div>
-      <p className="muted small">The PDF holds the person’s home address and pay. Every download is logged.</p>
+      <p className="muted small">
+        {guest
+          ? 'Downloading the filled PDF is for staff: it holds the person’s home address and pay.'
+          : 'The PDF holds the person’s home address and pay. Every download is logged.'}
+      </p>
 
       {editable ? (
         <form

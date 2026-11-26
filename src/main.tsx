@@ -13,6 +13,7 @@ import { AuditPage } from './pages/AuditPage'
 import { ConnectionsPage } from './pages/ConnectionsPage'
 import { ContractPage, ContractSettingsPage, ProductionContractsPage } from './pages/ContractPages'
 import { ConnectPage } from './pages/ConnectPage'
+import { DemoPage } from './pages/DemoPage'
 import { DraftsPage } from './pages/DraftsPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
@@ -36,6 +37,7 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/sign-in', element: <SignInPage /> },
+      { path: '/demo', element: <DemoPage /> },
       { path: '/setup-2fa', element: <SetupTwoFactorPage /> },
       { path: '/connect', element: <ConnectPage /> },
       {

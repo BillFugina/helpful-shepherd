@@ -1,4 +1,5 @@
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
+import { GUEST_SESSION_SECONDS, isGuestUserId } from '../shared/access.js'
 import { auth } from './auth.js'
 import { lazyDb } from './db/client.js'
 import { appRouter } from './routers/index.js'
@@ -25,7 +26,13 @@ export async function createContext(request: Request): Promise<Context> {
   let user: Context['user'] = null
   try {
     const session = await auth().api.getSession({ headers: request.headers })
-    if (session) {
+    // A guest demo session isn't refreshed, but if anything ever stretched one,
+    // it still stops counting after its time is up.
+    const guestExpired =
+      session !== null &&
+      isGuestUserId(session.user.id) &&
+      Date.now() - new Date(session.session.createdAt).getTime() > GUEST_SESSION_SECONDS * 1000
+    if (session && !guestExpired) {
       user = {
         id: session.user.id,
         email: session.user.email,
