@@ -10,6 +10,9 @@ import { AccessPage } from './pages/AccessPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { ArrivalsPage } from './pages/ArrivalsPage'
 import { AuditPage } from './pages/AuditPage'
+import { ConnectionsPage } from './pages/ConnectionsPage'
+import { ConnectPage } from './pages/ConnectPage'
+import { DraftsPage } from './pages/DraftsPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
 import { HomePage } from './pages/HomePage'
@@ -33,6 +36,7 @@ const router = createBrowserRouter([
       { path: '/', element: <HomePage /> },
       { path: '/sign-in', element: <SignInPage /> },
       { path: '/setup-2fa', element: <SetupTwoFactorPage /> },
+      { path: '/connect', element: <ConnectPage /> },
       {
         element: <RequireStaff />,
         children: [
@@ -47,6 +51,8 @@ const router = createBrowserRouter([
           { path: '/people', element: <PeoplePage /> },
           { path: '/people/:personId', element: <PersonPage /> },
           { path: '/agents', element: <AgentsPage /> },
+          { path: '/drafts', element: <DraftsPage /> },
+          { path: '/settings/connections', element: <ConnectionsPage /> },
           { path: '/admin/access', element: <AccessPage /> },
           { path: '/admin/audit', element: <AuditPage /> },
         ],

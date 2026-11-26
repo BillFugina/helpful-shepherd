@@ -119,10 +119,10 @@ export const CONFLICT_FIELDS = {
 // Input schemas
 // ---------------------------------------------------------------------------
 
-const isoDate = z.iso.date()
-const optionalDate = isoDate.nullable().optional()
-const trimmed = (max: number) => z.string().trim().min(1).max(max)
-const optionalText = (max: number) =>
+export const isoDate = z.iso.date()
+export const optionalDate = isoDate.nullable().optional()
+export const trimmed = (max: number) => z.string().trim().min(1).max(max)
+export const optionalText = (max: number) =>
   z
     .string()
     .trim()
@@ -132,7 +132,7 @@ const optionalText = (max: number) =>
     .transform((v) => (v === '' ? null : v))
 
 /** Checks that each present pair of dates is in order. */
-function datesInOrder<T extends Record<string, unknown>>(
+export function datesInOrder<T extends Record<string, unknown>>(
   value: T,
   ctx: z.RefinementCtx,
   keys: readonly (keyof T & string)[],
@@ -277,6 +277,8 @@ export const quickCreateEngagementInput = z
     agent: agentChoice,
     terms: engagementTerms,
     conflicts: z.array(conflictInput).max(50).default([]),
+    // Set when the form was prefilled from a Claude connector draft.
+    draftId: z.uuid().optional(),
   })
   .superRefine((v, ctx) => datesInOrder(v.terms, ctx, ['preferredArrival', 'preferredDeparture']))
 

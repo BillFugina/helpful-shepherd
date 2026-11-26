@@ -5,6 +5,8 @@ import { accessRouter } from './access.js'
 import { agentsRouter } from './agents.js'
 import { arrivalsRouter } from './arrivals.js'
 import { auditRouter } from './audit.js'
+import { connectionsRouter } from './connections.js'
+import { draftsRouter } from './drafts.js'
 import { engagementsRouter } from './engagements.js'
 import { housingRouter } from './housing.js'
 import { importRouter } from './import.js'
@@ -32,6 +34,8 @@ export const appRouter = router({
   import: importRouter,
   access: accessRouter,
   audit: auditRouter,
+  drafts: draftsRouter,
+  connections: connectionsRouter,
 })
 
 export type AppRouter = typeof appRouter

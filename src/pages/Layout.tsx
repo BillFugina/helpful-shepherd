@@ -30,6 +30,9 @@ export function Layout() {
               <NavLink to="/seasons">Seasons</NavLink>
               <NavLink to="/people">People</NavLink>
               <NavLink to="/agents">Agents</NavLink>
+              {levelAtLeast(levelFor(me.data?.grants ?? {}, 'general'), 'edit') ? (
+                <NavLink to="/drafts">Drafts</NavLink>
+              ) : null}
               {sees('travel_logistics') ? <NavLink to="/arrivals">Arrivals</NavLink> : null}
               {sees('housing_access') ? <NavLink to="/housing">Housing</NavLink> : null}
               {me.data?.role === ADMIN_ROLE ? (
@@ -42,6 +45,11 @@ export function Layout() {
           ) : null}
           {me.data ? (
             <>
+              {staff ? (
+                <NavLink to="/settings/connections" title="Connected apps">
+                  Apps
+                </NavLink>
+              ) : null}
               <span className="muted" title={me.data.email}>
                 {me.data.role ? ROLE_LABELS[me.data.role] : me.data.email}
               </span>

@@ -15,6 +15,9 @@ const ACTION_LABELS: Record<string, string> = {
   export: 'Exported',
   grant_change: 'Changed access',
   role_change: 'Changed role',
+  read: 'Looked up',
+  connect: 'Connected an app',
+  disconnect: 'Disconnected an app',
 }
 
 /** Who viewed, changed, downloaded or sent what. Append-only; filter by person. */
@@ -62,6 +65,7 @@ export function AuditPage() {
                   <td>
                     {ACTION_LABELS[e.action] ?? e.action}
                     {describeDetail(e.detail)}
+                    {e.via === 'connector' ? <span className="muted"> · via Claude</span> : null}
                   </td>
                   <td>{e.personName ?? <span className="muted">–</span>}</td>
                   <td>
@@ -82,6 +86,7 @@ export function AuditPage() {
 function describeDetail(detail: Record<string, unknown> | null): string {
   if (!detail) return ''
   if (typeof detail.field === 'string') return ` (${detail.field})`
+  if (typeof detail.tool === 'string') return ` (${detail.tool.replaceAll('_', ' ')})`
   if (typeof detail.role === 'string') return ` (${detail.role}: ${String(detail.from)} → ${String(detail.to)})`
   return ''
 }

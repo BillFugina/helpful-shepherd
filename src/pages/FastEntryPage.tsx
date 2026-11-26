@@ -1,11 +1,20 @@
 import { useForm } from '@tanstack/react-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { TermsFields, required, type HasField } from '../components/TermsFields'
 import { errorText } from '../lib/errors'
-import { displayName, EMPTY_TERMS, formatDate, termsFromDraft, TextInput, useCan, type TermsDraft } from '../lib/fields'
-import { useTRPC } from '../lib/trpc'
+import {
+  displayName,
+  draftFromEngagement,
+  EMPTY_TERMS,
+  formatDate,
+  termsFromDraft,
+  TextInput,
+  useCan,
+  type TermsDraft,
+} from '../lib/fields'
+import { useTRPC, type RouterOutputs } from '../lib/trpc'
 
 interface ConflictDraft {
   startsOn: string
@@ -39,12 +48,61 @@ const DEFAULTS: Values = {
 
 const orNull = (s: string) => (s.trim() ? s.trim() : null)
 
+type Draft = RouterOutputs['drafts']['get']
+
+/** Form values from a connector draft, for the Company Manager to check and save. */
+function valuesFromDraft(d: Draft): Values {
+  return {
+    personMode: d.matchedPerson ? 'existing' : 'new',
+    personId: d.matchedPerson?.id ?? '',
+    personLabel: d.matchedPerson?.legalName ?? '',
+    person: {
+      legalName: d.person.legalName,
+      preferredName: d.person.preferredName ?? '',
+      email: d.person.email ?? '',
+      cell: d.person.cell ?? '',
+      homeAirport: d.person.homeAirport ?? '',
+    },
+    agentMode: d.matchedAgentId ? 'existing' : d.agent ? 'new' : 'none',
+    agentId: d.matchedAgentId ?? '',
+    agent: {
+      name: d.agent?.name ?? '',
+      agency: d.agent?.agency ?? '',
+      email: d.agent?.email ?? '',
+      phone: d.agent?.phone ?? '',
+    },
+    terms: draftFromEngagement(d.terms),
+    conflicts: d.conflicts.map((c) => ({ startsOn: c.startsOn, endsOn: c.endsOn, description: c.description })),
+  }
+}
+
 /**
  * The fast-entry form, laid out in the order of the acceptance email: who,
  * role, pay, agent and commission, travel and housing, conflicts, the rest.
- * One save writes the person, agent, deal and conflicts together.
+ * One save writes the person, agent, deal and conflicts together. With
+ * ?draft=, it opens filled in from a draft the Claude connector made, and
+ * saving it is what turns the draft into a real record.
  */
 export function FastEntryPage() {
+  const [params] = useSearchParams()
+  const draftId = params.get('draft')
+  const trpc = useTRPC()
+  const draft = useQuery({ ...trpc.drafts.get.queryOptions({ id: draftId ?? '' }), enabled: Boolean(draftId) })
+  if (!draftId) return <FastEntryForm initial={DEFAULTS} draft={null} />
+  if (draft.isPending) return <p className="muted">Loading…</p>
+  if (draft.error) return <p className="error">{errorText(draft.error)}</p>
+  if (draft.data.status !== 'pending') {
+    return (
+      <p>
+        That draft was already {draft.data.status}.{' '}
+        {draft.data.engagementId ? <Link to={`/engagements/${draft.data.engagementId}`}>Open the record</Link> : null}
+      </p>
+    )
+  }
+  return <FastEntryForm key={draftId} initial={valuesFromDraft(draft.data)} draft={draft.data} />
+}
+
+function FastEntryForm({ initial, draft }: { initial: Values; draft: Draft | null }) {
   const { productionId = '' } = useParams()
   const trpc = useTRPC()
   const can = useCan()
@@ -55,11 +113,13 @@ export function FastEntryPage() {
   const create = useMutation(trpc.engagements.quickCreate.mutationOptions())
   const payTerms = can('pay_terms', 'edit')
 
+  const dismiss = useMutation(trpc.drafts.dismiss.mutationOptions())
   const form = useForm({
-    defaultValues: DEFAULTS,
+    defaultValues: initial,
     onSubmit: async ({ value }) => {
       const result = await create.mutateAsync({
         productionId,
+        ...(draft ? { draftId: draft.id } : {}),
         person:
           value.personMode === 'existing'
             ? { kind: 'existing', personId: value.personId }
@@ -90,6 +150,7 @@ export function FastEntryPage() {
         terms: termsFromDraft(value.terms, { payTerms }),
         conflicts: value.conflicts.map((c) => ({ ...c, description: c.description.trim() })),
       })
+      if (draft) await queryClient.invalidateQueries({ queryKey: trpc.drafts.list.queryKey() })
       if (production.data) {
         await queryClient.invalidateQueries({
           queryKey: trpc.seasons.dashboard.queryKey({ id: production.data.seasonId }),
@@ -115,6 +176,36 @@ export function FastEntryPage() {
         Rehearsal {formatDate(p.rehearsalStart)} · Opens {formatDate(p.opening)} · Closes {formatDate(p.closing)}. Fill
         it in straight from the acceptance email.
       </p>
+      {draft ? (
+        <div className="card draft-note">
+          <p>
+            <strong>Draft from Claude.</strong> Check every field against the email before you save. Nothing is on the
+            roster until you do.
+            {draft.matchedPerson
+              ? ' This looks like someone already in the app, so it will add them as returning.'
+              : ''}
+          </p>
+          {draft.sourceText ? (
+            <details>
+              <summary>The acceptance email</summary>
+              <pre className="source-email">{draft.sourceText}</pre>
+            </details>
+          ) : null}
+          <button
+            type="button"
+            className="secondary"
+            disabled={dismiss.isPending}
+            onClick={async () => {
+              await dismiss.mutateAsync({ id: draft.id })
+              await queryClient.invalidateQueries({ queryKey: trpc.drafts.list.queryKey() })
+              await navigate('/drafts')
+            }}
+          >
+            {dismiss.isPending ? 'Dismissing…' : 'Dismiss this draft'}
+          </button>
+          {dismiss.error ? <span className="error">{errorText(dismiss.error)}</span> : null}
+        </div>
+      ) : null}
       <form
         className="stack"
         onSubmit={(e) => {
@@ -324,7 +415,7 @@ export function FastEntryPage() {
               </button>
             )}
           </form.Subscribe>
-          <Link to={`/seasons/${p.seasonId}`}>Cancel</Link>
+          <Link to={draft ? '/drafts' : `/seasons/${p.seasonId}`}>Cancel</Link>
         </div>
         {create.error ? <p className="error">{errorText(create.error)}</p> : null}
       </form>

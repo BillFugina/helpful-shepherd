@@ -216,5 +216,10 @@ export const AUDIT_ACTIONS = [
   'export',
   'grant_change',
   'role_change',
+  // Claude connector: a read through a connector tool, and an app being
+  // connected or disconnected.
+  'read',
+  'connect',
+  'disconnect',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]

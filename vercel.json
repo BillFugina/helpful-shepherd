@@ -4,8 +4,25 @@
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/trpc/:path*", "destination": "/api/trpc" },
-    { "source": "/api/auth/:path*", "destination": "/api/auth" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/api/trpc/:path*",
+      "destination": "/api/trpc"
+    },
+    {
+      "source": "/api/auth/:path*",
+      "destination": "/api/auth"
+    },
+    {
+      "source": "/api/mcp",
+      "destination": "/api/mcp"
+    },
+    {
+      "source": "/.well-known/:path*",
+      "destination": "/api/well-known"
+    },
+    {
+      "source": "/((?!api/|\\.well-known/).*)",
+      "destination": "/index.html"
+    }
   ]
 }

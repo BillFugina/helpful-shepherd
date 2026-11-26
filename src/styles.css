@@ -481,3 +481,20 @@ legend {
 .room-form input[type='number'] {
   width: 64px;
 }
+
+/* Connector drafts and connected apps */
+.draft-note {
+  border-left: 4px solid var(--accent, #b4532a);
+}
+.source-email {
+  white-space: pre-wrap;
+  max-height: 20rem;
+  overflow: auto;
+  font-size: 0.85rem;
+}
+.card.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}

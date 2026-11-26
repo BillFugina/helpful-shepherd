@@ -1,8 +1,9 @@
 import { TRPCError } from '@trpc/server'
-import { asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { filterRecord, levelAtLeast, levelFor } from '../../shared/access.js'
 import {
+  CONFLICT_FIELDS,
   createProductionInput,
   createSeasonInput,
   ENGAGEMENT_FIELDS,
@@ -13,7 +14,7 @@ import {
 } from '../../shared/roster.js'
 import type { Db } from '../db/client.js'
 import { agent, conflict, engagement, person, production, season } from '../db/schema.js'
-import { engagementRecord, productionRecord, seasonRecord } from '../roster/records.js'
+import { conflictRecord, engagementRecord, productionRecord, seasonRecord } from '../roster/records.js'
 import { router, staffProcedure } from '../trpc.js'
 import { auditChange, friendly, groupsOf, requireEdit, requireView, writtenKeys } from '../writes.js'
 
@@ -140,6 +141,48 @@ export const seasonsRouter = router({
 })
 
 export const productionsRouter = router({
+  /** Every production, newest season first, with its season's name. */
+  list: staffProcedure.query(async ({ ctx }) => {
+    requireView(ctx.grants, 'general')
+    const rows = await ctx.db
+      .select({ production, seasonName: season.name, seasonStartsOn: season.startsOn })
+      .from(production)
+      .innerJoin(season, eq(season.id, production.seasonId))
+      .orderBy(desc(season.startsOn), sql`${production.rehearsalStart} asc nulls last`, asc(production.title))
+    return rows.map((r) => ({
+      ...filterRecord(productionRecord(r.production), PRODUCTION_FIELDS, ctx.grants),
+      seasonName: r.seasonName,
+    }))
+  }),
+
+  /**
+   * Everyone's conflicts on one production, soonest first. With `from`, only
+   * conflicts that haven't ended before that date.
+   */
+  conflicts: staffProcedure
+    .input(z.object({ id: z.uuid(), from: z.iso.date().optional() }))
+    .query(async ({ ctx, input }) => {
+      requireView(ctx.grants, 'general')
+      const rows = await ctx.db
+        .select({
+          conflict,
+          role: engagement.role,
+          personId: person.id,
+          legalName: person.legalName,
+          preferredName: person.preferredName,
+        })
+        .from(conflict)
+        .innerJoin(engagement, eq(engagement.id, conflict.engagementId))
+        .innerJoin(person, eq(person.id, engagement.personId))
+        .where(and(eq(engagement.productionId, input.id), input.from ? gte(conflict.endsOn, input.from) : undefined))
+        .orderBy(asc(conflict.startsOn), asc(person.legalName))
+      return rows.map((r) => ({
+        ...filterRecord(conflictRecord(r.conflict), CONFLICT_FIELDS, ctx.grants),
+        role: r.role,
+        person: { id: r.personId, legalName: r.legalName, preferredName: r.preferredName },
+      }))
+    }),
+
   get: staffProcedure.input(z.object({ id: z.uuid() })).query(async ({ ctx, input }) => {
     requireView(ctx.grants, 'general')
     const [row] = await ctx.db
