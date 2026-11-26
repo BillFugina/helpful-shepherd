@@ -57,6 +57,13 @@
       "when": 1795717439653,
       "tag": "0007_previous_talos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795727985833,
+      "tag": "0008_documents",
+      "breakpoints": true
     }
   ]
 }

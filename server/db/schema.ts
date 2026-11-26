@@ -20,6 +20,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { ACCESS_LEVELS, AUDIT_ACTIONS, FIELD_GROUPS, ROLES } from '../../shared/access.js'
 import { CONTRACT_STATUSES, TEMPLATE_FORMATS } from '../../shared/contracts.js'
+import { DOCUMENT_STATUSES, DOCUMENT_TYPES } from '../../shared/documents.js'
 import { DRAFT_STATUS_LIST } from '../../shared/drafts.js'
 import { CONTRACT_TYPES, PIPELINE_STATUSES, PROGRAMS } from '../../shared/roster.js'
 import {
@@ -875,5 +876,122 @@ export const contract = pgTable(
       .where(sql`${t.status} <> 'void'`),
     check('contract_sent_has_date', sql`${t.status} in ('draft', 'void') or ${t.sentOn} is not null`),
     check('contract_signed_has_date', sql`${t.status} <> 'signed' or ${t.signedOn} is not null`),
+  ],
+)
+
+// ---------------------------------------------------------------------------
+// Documents: the paperwork checklist and the handoff to Finance. Statuses are
+// the documents group; the files are tax_bank and are encrypted before they
+// reach this table.
+// ---------------------------------------------------------------------------
+
+export const documentType = pgEnum('document_type', DOCUMENT_TYPES)
+export const documentStatus = pgEnum('document_status', DOCUMENT_STATUSES)
+
+/** Which forms each contract type needs. The Company Manager edits this. */
+export const documentRequirement = pgTable(
+  'document_requirement',
+  {
+    contractType: contractType('contract_type').notNull(),
+    documentType: documentType('document_type').notNull(),
+    ...timestamps,
+  },
+  (t) => [primaryKey({ columns: [t.contractType, t.documentType] })],
+)
+
+/**
+ * One form for one engagement. A row exists once something has happened to
+ * it; a required form with no row is Missing.
+ */
+export const document = pgTable(
+  'document',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    documentType: documentType('document_type').notNull(),
+    status: documentStatus('status').notNull().default('missing'),
+    receivedOn: date('received_on', { mode: 'string' }),
+    // 'upload_link' or 'company_manager'.
+    receivedVia: text('received_via'),
+    sentToFinanceAt: timestamp('sent_to_finance_at', { withTimezone: true }),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    // When the file was deleted (accepted, removed or past retention).
+    filePurgedAt: timestamp('file_purged_at', { withTimezone: true }),
+    // Finance's note when it sends a form back.
+    financeNote: text('finance_note'),
+    isDemo: boolean('is_demo').notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [
+    unique('document_engagement_type_uq').on(t.engagementId, t.documentType),
+    index('document_status_idx').on(t.status),
+    check('document_received_has_date', sql`${t.status} in ('missing', 'not_needed') or ${t.receivedOn} is not null`),
+    check('document_sent_has_time', sql`${t.status} <> 'sent_to_finance' or ${t.sentToFinanceAt} is not null`),
+    check('document_accepted_has_time', sql`${t.status} <> 'accepted' or ${t.acceptedAt} is not null`),
+  ],
+)
+
+/**
+ * The file for one document, held only until Finance accepts it. The bytes
+ * and the file name are both encrypted with the field key; the row's id is
+ * bound in so a file can't be moved to another document.
+ */
+export const documentFile = pgTable('document_file', {
+  documentId: uuid('document_id')
+    .primaryKey()
+    .references(() => document.id, { onDelete: 'cascade' }),
+  // iv (12 bytes) | tag (16 bytes) | ciphertext
+  data: bytea('data').notNull(),
+  fileNameEnc: text('file_name_enc').notNull(),
+  mime: text('mime').notNull(),
+  bytes: integer('bytes').notNull(),
+  uploadedBy: text('uploaded_by'),
+  ...timestamps,
+})
+
+/**
+ * A link the Company Manager sends so a person can upload their own forms
+ * without an account. Only a hash of the token is kept.
+ */
+export const uploadLink = pgTable(
+  'upload_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    documentTypes: documentType('document_types').array().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    uploads: integer('uploads').notNull().default(0),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('upload_link_token_hash_uq').on(t.tokenHash),
+    index('upload_link_engagement_id_idx').on(t.engagementId),
+  ],
+)
+
+/** Documents settings. One row. */
+export const documentSettings = pgTable(
+  'document_settings',
+  {
+    id: integer('id').primaryKey().default(1),
+    linkDays: integer('link_days').notNull().default(14),
+    retentionYears: integer('retention_years').notNull().default(3),
+    // False until Finance confirms how long forms may be held.
+    retentionConfirmed: boolean('retention_confirmed').notNull().default(false),
+    lastPurgeAt: timestamp('last_purge_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    check('document_settings_single_row', sql`${t.id} = 1`),
+    check('document_settings_link_days', sql`${t.linkDays} between 1 and 60`),
+    check('document_settings_retention', sql`${t.retentionYears} between 1 and 10`),
   ],
 )

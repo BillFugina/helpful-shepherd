@@ -505,3 +505,57 @@ legend {
 ol.tour li {
   margin-bottom: 8px;
 }
+
+/* Documents */
+.doc-missing {
+  background: var(--stage-early);
+}
+.doc-received,
+.doc-sent_to_finance {
+  background: var(--stage-mid);
+}
+.doc-accepted,
+.doc-not_needed {
+  background: var(--stage-done);
+}
+.doc-flagged {
+  background: var(--banner);
+  color: var(--error);
+}
+.actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+}
+.inline-form {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.subsection {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+code.break {
+  word-break: break-all;
+}
+.upload-shell {
+  max-width: 640px;
+  margin: 32px auto;
+  padding: 0 16px;
+}
+.upload-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+}
+.upload-list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}

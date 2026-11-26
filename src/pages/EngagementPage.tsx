@@ -8,6 +8,7 @@ import { displayName, dollars, draftFromEngagement, formatDate, termsFromDraft, 
 import { useTRPC } from '../lib/trpc'
 import type { Outputs } from '../lib/types'
 import { EngagementContracts } from './ContractPages'
+import { EngagementDocuments } from './DocumentPages'
 import { StatusCell } from './SeasonPage'
 
 type Detail = Outputs['engagements']['get']
@@ -50,6 +51,7 @@ export function EngagementPage() {
       {can('general', 'edit') ? <EditTerms detail={d} /> : <ReadTerms detail={d} />}
       <Conflicts detail={d} />
       <EngagementContracts engagementId={engagementId} />
+      <EngagementDocuments engagementId={engagementId} />
       {can('general', 'edit') && can('contact', 'edit') && can('pay_terms', 'edit') ? (
         <RemoveButton detail={d} />
       ) : null}

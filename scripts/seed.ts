@@ -47,7 +47,7 @@ for (const s of staff) {
 }
 const counts = await reseedDemo(db)
 console.info(
-  `[seed] demo roster: ${counts.people} people, ${counts.agents} agents, ${counts.productions} productions, ${counts.engagements} engagements, ${counts.conflicts} conflicts`,
+  `[seed] demo roster: ${counts.people} people, ${counts.agents} agents, ${counts.productions} productions, ${counts.engagements} engagements, ${counts.conflicts} conflicts, ${counts.contracts} contracts, ${counts.documents} document statuses`,
 )
 console.info(
   `[seed] demo travel: ${counts.flights} flights, ${counts.cars} rental cars, ${counts.housingUnits} places with ${counts.rooms} rooms, ${counts.stays} stays`,

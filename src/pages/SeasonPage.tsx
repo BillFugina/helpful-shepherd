@@ -89,15 +89,27 @@ function ProductionCard({ seasonId, production: p }: { seasonId: string; product
                 Contracts
               </Link>
             ) : null}
+            {can('documents', 'view') ? (
+              <Link className="button secondary" to={`/productions/${p.id}/documents`}>
+                Documents
+              </Link>
+            ) : null}
             <button type="button" className="link" onClick={() => setEditing(!editing)}>
               {editing ? 'Close' : 'Edit details'}
             </button>
           </div>
-        ) : can('contracts', 'view') ? (
+        ) : can('contracts', 'view') || can('documents', 'view') ? (
           <div className="actions">
-            <Link className="button secondary" to={`/productions/${p.id}/contracts`}>
-              Contracts
-            </Link>
+            {can('contracts', 'view') ? (
+              <Link className="button secondary" to={`/productions/${p.id}/contracts`}>
+                Contracts
+              </Link>
+            ) : null}
+            {can('documents', 'view') ? (
+              <Link className="button secondary" to={`/productions/${p.id}/documents`}>
+                Documents
+              </Link>
+            ) : null}
           </div>
         ) : null}
       </header>

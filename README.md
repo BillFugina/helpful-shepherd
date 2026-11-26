@@ -89,6 +89,39 @@ phone push alerts and an "arriving tomorrow" summary. Here the tracker runs
 when someone looks at the board, throttled to once a minute per flight. The
 scheduled job needs an Inngest account and push keys.
 
+## What's here (documents)
+
+- **A checklist per engagement** (Documents, on the engagement page): W-4,
+  NC-4, I-9, W-9, Equity deferral, direct deposit and bank verification, as
+  Missing, Received, Sent to Finance, Accepted by Finance or Not needed. Which
+  forms each contract type needs is set on `/documents/settings`.
+- **Upload links.** The Company Manager makes a private link for the forms
+  still open and sends it themselves. The person opens `/upload/<token>` with
+  no account and uploads a PDF or a photo (up to 3 MB; the server checks the
+  bytes, not the name). Only a hash of the token is stored; the link expires
+  (14 days by default), takes at most 20 uploads and can be turned off. The
+  Company Manager can also upload a form by hand.
+- **Encrypted files.** Each file and its name are encrypted with AES-256-GCM
+  before they reach Postgres, bound to their document. Opening one needs Tax
+  and bank docs and is logged; the guest demo and the Claude connector never
+  get files.
+- **Handoff to Finance.** Send to Finance puts a form in Finance's queue
+  (`/documents`). Finance accepts it, and the app deletes its copy at once and
+  keeps only the status and dates, or sends it back with a note the person
+  sees on their link. A signed deal moves to Paperwork complete when every
+  form is accepted or not needed.
+- **Retention backstop.** Any file still held a set number of years after its
+  production closes is deleted. It starts at 3 years and is marked as waiting
+  for Finance to confirm. It runs when staff open a production's documents, at
+  most once an hour, so it needs no scheduler.
+- **Claude connector:** `missing_documents` reads one production's statuses.
+- Demo data holds statuses only, never a file; opening a demo form gives a
+  SAMPLE page. Any real upload closes the guest demo until the file is gone.
+
+**Not yet:** emailing links, reminders and a daily digest need an email
+service or Inngest. Files live in Postgres rather than Vercel Blob so no new
+account is needed; swapping in Blob later is a contained change.
+
 ## Guest demo
 
 Anyone can look around the whole app without an account: **Try the demo** on
@@ -102,7 +135,8 @@ guest.
   account or turn on two-factor.
 - **Fixed, view-only access** (`GUEST_GRANTS` in `shared/access.ts`): never
   dates of birth, travel IDs, tax or bank details, door codes, access notes or
-  contract PDF downloads, and no admin screens.
+  contract PDF downloads or uploaded forms (it sees the checklist's statuses),
+  and no admin screens.
 - **Own demo clock.** Each guest moves time on the Arrivals board without
   changing it for anyone else; their board replays the simulated feed in memory.
 - **Free-tier guardrails:** 5 starts a minute per visitor, at most 1000 live

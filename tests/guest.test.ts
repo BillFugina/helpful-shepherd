@@ -3,7 +3,18 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encryptField, fieldKey } from '../server/crypto/fields.js'
 import { createDb, type Db } from '../server/db/client.js'
-import { auditEvent, organization, person, rateLimit, session } from '../server/db/schema.js'
+import {
+  auditEvent,
+  document,
+  documentFile,
+  engagement,
+  organization,
+  person,
+  production,
+  rateLimit,
+  season,
+  session,
+} from '../server/db/schema.js'
 import { ensureGuestUser, guestDemoClosed } from '../server/demo/guest.js'
 import { DEMO_ORGANIZATION } from '../server/demo/organization.js'
 import { replayFlight } from '../server/flights/replay.js'
@@ -231,6 +242,45 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
     }
     expect(await guestDemoClosed(db)).toBeNull()
     expect(await createCaller({ db, user: guest }).people.list()).not.toHaveLength(0)
+  })
+
+  it('an uploaded form closes the demo until the file is gone', async () => {
+    const [s] = await db
+      .insert(season)
+      .values({
+        name: `Guest docs ${randomUUID()}`,
+        program: 'main_stage',
+        startsOn: '2027-01-01',
+        endsOn: '2027-12-31',
+        isDemo: true,
+      })
+      .returning({ id: season.id })
+    const [p] = await db
+      .insert(production)
+      .values({ seasonId: s!.id, title: 'Guest docs play', isDemo: true })
+      .returning({ id: production.id })
+    const [e] = await db
+      .insert(engagement)
+      .values({ personId, productionId: p!.id, role: 'Lead', contractType: 'equity_itc', isDemo: true })
+      .returning({ id: engagement.id })
+    try {
+      const [d] = await db
+        .insert(document)
+        .values({ engagementId: e!.id, documentType: 'w4', status: 'received', receivedOn: '2027-01-01', isDemo: true })
+        .returning({ id: document.id })
+      // A demo status alone keeps the demo open.
+      expect(await guestDemoClosed(db)).toBeNull()
+      await db
+        .insert(documentFile)
+        .values({ documentId: d!.id, data: Buffer.from('x'), fileNameEnc: 'x', mime: 'application/pdf', bytes: 1 })
+      expect(await guestDemoClosed(db)).toBe('real_data')
+      await db.delete(documentFile).where(eq(documentFile.documentId, d!.id))
+      expect(await guestDemoClosed(db)).toBeNull()
+    } finally {
+      await db.delete(engagement).where(eq(engagement.id, e!.id))
+      await db.delete(production).where(eq(production.id, p!.id))
+      await db.delete(season).where(eq(season.id, s!.id))
+    }
   })
 
   it('real theatre details close the demo too', async () => {
