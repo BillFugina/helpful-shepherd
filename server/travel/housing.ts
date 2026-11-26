@@ -4,6 +4,16 @@ import type { Db } from '../db/client.js'
 import { engagement, flight, housingAssignment, housingPreference, housingRoom, person } from '../db/schema.js'
 import { shortName, travelDates } from './records.js'
 
+const FLIGHT_WARNINGS = new Set<HousingWarning['kind']>(['arrives_before_housing', 'leaves_after_housing'])
+
+/**
+ * Warnings a role may see. The arrives-before and leaves-after warnings give
+ * flight dates, so they need Travel logistics as well as Housing.
+ */
+export function visibleWarnings<W extends Pick<HousingWarning, 'kind'>>(warnings: W[], seesTravel: boolean): W[] {
+  return seesTravel ? warnings : warnings.filter((w) => !FLIGHT_WARNINGS.has(w.kind))
+}
+
 export interface StaysResult {
   stays: StayForCheck[]
   warnings: HousingWarning[]

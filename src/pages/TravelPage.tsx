@@ -70,6 +70,8 @@ function useRefresh(engagementId: string) {
     await queryClient.invalidateQueries({ queryKey: trpc.travel.forEngagement.queryKey({ engagementId }) })
     await queryClient.invalidateQueries({ queryKey: trpc.arrivals.board.pathKey() })
     await queryClient.invalidateQueries({ queryKey: trpc.housing.occupancy.pathKey() })
+    await queryClient.invalidateQueries({ queryKey: trpc.housing.needs.queryKey() })
+    await queryClient.invalidateQueries({ queryKey: trpc.housing.plan.pathKey() })
   }
 }
 

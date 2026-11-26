@@ -18,6 +18,7 @@ import { simulateStatus, type FlightSpec } from '../server/flights/provider.js'
 import { changesBetween, setDemoClock } from '../server/flights/track.js'
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
+import { visibleWarnings } from '../server/travel/housing.js'
 import { createCallerFactory, type SessionUser } from '../server/trpc.js'
 import { DEFAULT_GRANTS, filterRecord, type Role } from '../shared/access.js'
 import { dayBounds, utcToLocal, zonedToUtc } from '../shared/time.js'
@@ -113,6 +114,16 @@ describe('simulated flight feed', () => {
 })
 
 describe('who still needs housing', () => {
+  it('drops the flight-date warnings for a role without travel logistics', () => {
+    const warnings = [
+      { assignmentId: 'a', kind: 'private_bathroom' as const, message: 'shares a bath' },
+      { assignmentId: 'a', kind: 'arrives_before_housing' as const, message: 'lands Feb 1' },
+      { assignmentId: 'a', kind: 'leaves_after_housing' as const, message: 'flies home Mar 2' },
+    ]
+    expect(visibleWarnings(warnings, true)).toHaveLength(3)
+    expect(visibleWarnings(warnings, false).map((w) => w.kind)).toEqual(['private_bathroom'])
+  })
+
   const dates = { preferredArrival: null, preferredDeparture: null, rehearsalStart: null, closing: null }
 
   it('takes the nights from flights, then the dates they asked for, then the production', () => {

@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server'
 import { and, asc, eq, gt, lt, ne } from 'drizzle-orm'
 import { z } from 'zod'
-import { filterRecord } from '../../shared/access.js'
+import { filterRecord, levelAtLeast, levelFor } from '../../shared/access.js'
 import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import {
   addHousingRoomInput,
@@ -19,7 +19,7 @@ import {
 } from '../../shared/travel.js'
 import type { Db } from '../db/client.js'
 import { engagement, housingAssignment, housingPreference, housingRoom, housingUnit, person } from '../db/schema.js'
-import { staysInWindow } from '../travel/housing.js'
+import { staysInWindow, visibleWarnings } from '../travel/housing.js'
 import { housingPlan, movesInWindow, needsAttention, openProductionIds, type PlanPerson } from '../travel/plan.js'
 import { housingRoomRecord, housingUnitRecord, shortName, withoutAccessForGuest } from '../travel/records.js'
 import { router, staffProcedure } from '../trpc.js'
@@ -247,7 +247,7 @@ export const housingRouter = router({
         startsOn: s.startsOn,
         endsOn: s.endsOn,
       })),
-      warnings,
+      warnings: visibleWarnings(warnings, levelAtLeast(levelFor(ctx.grants, 'travel_logistics'), 'view')),
       moves: await movesInWindow(ctx.db, input.from, to),
     }
   }),

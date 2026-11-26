@@ -31,7 +31,7 @@ import {
   production,
   rentalCar,
 } from '../db/schema.js'
-import { staysInWindow, stayWindow } from '../travel/housing.js'
+import { staysInWindow, stayWindow, visibleWarnings } from '../travel/housing.js'
 import {
   flightRecord,
   housingAssignmentRecord,
@@ -137,8 +137,11 @@ export const travelRouter = router({
         .orderBy(asc(housingAssignment.startsOn))
       const window = await stayWindow(ctx.db, e.id)
       const warnings = window
-        ? (await staysInWindow(ctx.db, window.from, window.to)).warnings.filter((w) =>
-            stays.some((s) => s.assignment.id === w.assignmentId),
+        ? visibleWarnings(
+            (await staysInWindow(ctx.db, window.from, window.to)).warnings.filter((w) =>
+              stays.some((s) => s.assignment.id === w.assignmentId),
+            ),
+            seesTravel,
           )
         : []
       const need = housingNeed({

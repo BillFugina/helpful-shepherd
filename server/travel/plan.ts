@@ -11,7 +11,7 @@ import {
 } from '../../shared/travel.js'
 import type { Db } from '../db/client.js'
 import { engagement, flight, housingAssignment, housingRoom, housingUnit, person, production } from '../db/schema.js'
-import { staysInWindow } from './housing.js'
+import { staysInWindow, visibleWarnings } from './housing.js'
 import { shortName, travelDates } from './records.js'
 
 /** One stay as the plan shows it: the place and room by name, never the address or how to get in. */
@@ -136,7 +136,7 @@ export async function housingPlan(
     const from = stayRows.reduce((m, s) => (s.startsOn < m ? s.startsOn : m), stayRows[0]!.startsOn)
     const to = stayRows.reduce((m, s) => (s.endsOn > m ? s.endsOn : m), stayRows[0]!.endsOn)
     const { warnings } = await staysInWindow(db, from, to)
-    for (const w of warnings)
+    for (const w of visibleWarnings(warnings, seesTravel))
       warningsByStay.set(w.assignmentId, [...(warningsByStay.get(w.assignmentId) ?? []), w.message])
   }
 
