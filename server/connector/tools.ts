@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server'
 import { z } from 'zod'
 import { localDate, THEATRE_TZ } from '../../shared/time.js'
+import { DOCUMENT_STATUS_LABELS, DOCUMENT_TYPE_LABELS } from '../../shared/documents.js'
 import { CONTRACT_TYPES } from '../../shared/roster.js'
 import { loadAccess } from '../access.js'
 import { recordAudit } from '../audit.js'
@@ -243,6 +244,47 @@ export const CONNECTOR_TOOLS = {
         people,
       }
       return { data, audit: { recordId: args.productionId, detail: { count: all.length } } }
+    },
+  }),
+
+  missing_documents: define({
+    title: 'Missing documents',
+    description:
+      'The paperwork checklist on one production: for each person, which forms (W-4, NC-4, I-9, W-9, Equity deferral, direct deposit, bank verification) are missing, received, with Finance, or done, and any note Finance left when it sent a form back. Statuses only; this never returns a form or anything on one. Read-only; forms are uploaded, sent to Finance and accepted in the app.',
+    input: z.object({ productionId: uuid('production') }),
+    readOnly: true,
+    run: async (args, env) => {
+      const d = await callerFor(env).documents.overview({ productionId: args.productionId })
+      const people = d.engagements.map((e) => ({
+        engagementId: e.id,
+        name: e.preferredName ?? e.legalName ?? null,
+        role: e.role,
+        contractType: e.contractType,
+        complete: e.summary.complete,
+        forms: e.checklist
+          .filter((c) => c.required)
+          .map((c) => ({
+            form: DOCUMENT_TYPE_LABELS[c.documentType],
+            status: DOCUMENT_STATUS_LABELS[c.status],
+            receivedOn: c.receivedOn,
+            financeNote: c.financeNote,
+          })),
+      }))
+      const sum = (k: 'missing' | 'received' | 'withFinance' | 'flagged') =>
+        d.engagements.reduce((n, e) => n + e.summary[k], 0)
+      const data = {
+        production: d.production.title,
+        counts: {
+          peopleComplete: people.filter((p) => p.complete).length,
+          peopleOutstanding: people.filter((p) => !p.complete).length,
+          missing: sum('missing'),
+          waitingToSend: sum('received'),
+          withFinance: sum('withFinance'),
+          sentBack: sum('flagged'),
+        },
+        people,
+      }
+      return { data, audit: { recordId: args.productionId, detail: { count: people.length } } }
     },
   }),
 

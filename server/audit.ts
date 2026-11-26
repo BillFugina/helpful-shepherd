@@ -10,7 +10,7 @@ export interface AuditInput {
   recordId?: string
   personId?: string
   fieldGroup?: FieldGroup
-  via?: 'app' | 'connector' | 'system'
+  via?: 'app' | 'connector' | 'system' | 'upload_link'
   /** Field names or other context. Never put a sensitive value here. */
   detail?: Record<string, unknown>
 }

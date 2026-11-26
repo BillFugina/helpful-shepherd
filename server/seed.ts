@@ -3,6 +3,8 @@ import { hashPassword } from 'better-auth/crypto'
 import { eq, inArray, or } from 'drizzle-orm'
 import { DEFAULT_GRANTS, ROLES, type Role } from '../shared/access.js'
 import { DEFAULT_RIDER_BODY, resolveContract, type ContractContext } from '../shared/contracts.js'
+import { DEFAULT_REQUIREMENTS, type DocumentStatus, type DocumentType } from '../shared/documents.js'
+import type { ContractType } from '../shared/roster.js'
 import { makeStandInForm } from './contracts/pdf.js'
 import { loadOrganization, valuesToFreeze } from './contracts/service.js'
 import { airportTz, THEATRE_AIRPORT, THEATRE_TZ, zonedToUtc } from '../shared/time.js'
@@ -13,6 +15,7 @@ import {
   account,
   agent,
   conflict,
+  document,
   contract,
   contractTemplate,
   engagement,
@@ -315,6 +318,7 @@ export interface DemoCounts {
   engagements: number
   conflicts: number
   contracts: number
+  documents: number
   flights: number
   cars: number
   housingUnits: number
@@ -478,6 +482,16 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       seasonName: '2027 Season (demo)',
       engagements: engagementRows.map((e, i) => ({ ...e, id: engagements[i]!.id })),
     })
+    const documentCount = await seedDocuments(
+      tx,
+      engagementRows.map((e, i) => ({
+        id: engagements[i]!.id,
+        contractType: e.contractType,
+        pipelineStatus: e.pipelineStatus,
+        rehearsalStart: DEMO_PRODUCTIONS[Math.floor(i / SLOTS.length)]!.rehearsalStart,
+        slot: i % SLOTS.length,
+      })),
+    )
 
     // Travel, cars and housing for everyone the theater brings in.
     const units = await tx
@@ -568,6 +582,7 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       engagements: engagements.length,
       conflicts: conflictRows.length,
       contracts: contractCount,
+      documents: documentCount,
       flights: flightRows.length,
       cars: carRows.length,
       housingUnits: units.length,
@@ -575,6 +590,60 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       stays: stayRows.length,
     }
   })
+}
+
+/** Statuses for a signed deal still collecting forms: one of each, so every screen has something to show. */
+const SIGNED_MIX: DocumentStatus[] = ['accepted', 'sent_to_finance', 'received', 'missing', 'accepted', 'received']
+
+/**
+ * The checklist as far along as each demo deal's pipeline status. Statuses
+ * only: the demo never holds a file (downloading one gives a SAMPLE page),
+ * and any file at all closes the guest demo.
+ */
+async function seedDocuments(
+  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
+  engagements: {
+    id: string
+    contractType: ContractType
+    pipelineStatus: string
+    rehearsalStart: string
+    slot: number
+  }[],
+): Promise<number> {
+  const rows: (typeof document.$inferInsert)[] = []
+  const at = (date: string) => new Date(`${date}T16:00:00Z`)
+  for (const e of engagements) {
+    const required: readonly DocumentType[] = DEFAULT_REQUIREMENTS[e.contractType]
+    const done = !['offer_accepted', 'contract_sent', 'contract_signed'].includes(e.pipelineStatus)
+    required.forEach((documentType, i) => {
+      let status: DocumentStatus
+      if (done) status = 'accepted'
+      else if (e.pipelineStatus === 'contract_signed') status = SIGNED_MIX[(i + e.slot) % SIGNED_MIX.length]!
+      else if (e.pipelineStatus === 'contract_sent') status = i < 2 ? 'received' : 'missing'
+      else return
+      // A returning company member's I-9 is still on file.
+      if (documentType === 'i9' && e.slot === 4 && status !== 'missing') status = 'not_needed'
+      if (status === 'missing') return
+      const receivedOn = addDays(e.rehearsalStart, -45 + i)
+      const sent = status === 'sent_to_finance' || status === 'accepted'
+      rows.push({
+        engagementId: e.id,
+        documentType,
+        status,
+        receivedOn: status === 'not_needed' ? null : receivedOn,
+        receivedVia: status === 'not_needed' ? null : i % 2 ? 'company_manager' : 'upload_link',
+        sentToFinanceAt: sent ? at(addDays(receivedOn, 1)) : null,
+        acceptedAt: status === 'accepted' ? at(addDays(receivedOn, 3)) : null,
+        filePurgedAt: status === 'accepted' ? at(addDays(receivedOn, 3)) : null,
+        isDemo: true,
+      })
+    })
+  }
+  // One form Finance sent back, so the flag shows.
+  const flagged = rows.find((r) => r.status === 'received' && r.documentType === 'w4')
+  if (flagged) flagged.financeNote = 'This is last year’s W-4. Please send the 2027 form (demo).'
+  if (rows.length) await tx.insert(document).values(rows)
+  return rows.length
 }
 
 /** The contract a demo deal has reached, from its pipeline status. Nothing before the fourth production's offers. */

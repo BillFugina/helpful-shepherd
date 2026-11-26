@@ -8,6 +8,8 @@ import {
   agent,
   contract,
   contractTemplate,
+  document,
+  documentFile,
   engagement,
   engagementDraft,
   housingUnit,
@@ -81,8 +83,10 @@ const demoValues = sql.join(
  * - real_data: the database holds a record that isn't fake demo data. Guests
  *   read with the same queries staff use, so the demo only runs on a database
  *   of demo records. Any record without the is_demo flag closes it, and so
- *   does any connector draft, because a draft keeps a pasted email, and any
- *   theatre details other than the demo's (they hold the employer's EIN).
+ *   does any connector draft, because a draft keeps a pasted email, any
+ *   theatre details other than the demo's (they hold the employer's EIN),
+ *   and any uploaded form at all (the demo seeds statuses, never files), so a
+ *   real W-4 sent through an upload link closes it until the file is gone.
  *
  * Checked when a guest signs in and again on every guest request, so turning
  * the demo off, or adding real data, takes effect at once for every open
@@ -100,6 +104,8 @@ export async function guestDemoClosed(db: Db): Promise<'off' | 'real_data' | nul
     or exists (select 1 from ${contractTemplate} where ${contractTemplate.isDemo} = false)
     or exists (select 1 from ${contract} where ${contract.isDemo} = false)
     or exists (select 1 from ${engagementDraft})
+    or exists (select 1 from ${document} where ${document.isDemo} = false)
+    or exists (select 1 from ${documentFile})
     or exists (select 1 from ${organization} where row(${organizationColumns}) is distinct from row(${demoValues}))
   ) as real`)) as unknown as { rows: { real: boolean }[] }
   return result.rows[0]?.real ? 'real_data' : null

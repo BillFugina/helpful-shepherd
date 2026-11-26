@@ -29,6 +29,7 @@ export const FIELD_GROUPS = [
   'pay_terms',
   'contracts',
   'tax_bank',
+  'documents',
   'travel_logistics',
   'housing_access',
   'comps',
@@ -43,6 +44,7 @@ export const FIELD_GROUP_LABELS: Record<FieldGroup, string> = {
   pay_terms: 'Pay terms (pay, commission, stipend)',
   contracts: 'Contracts',
   tax_bank: 'Tax and bank docs',
+  documents: 'Document checklist (statuses, no files)',
   travel_logistics: 'Travel logistics (flights, cars)',
   housing_access: 'Housing access (address, door code)',
   comps: 'Comps (Phase 2)',
@@ -89,6 +91,7 @@ export const DEFAULT_GRANTS: Record<Role, Grants> = {
     pay_terms: 'edit',
     contracts: 'edit',
     tax_bank: 'edit',
+    documents: 'edit',
     travel_logistics: 'edit',
     housing_access: 'edit',
     comps: 'edit',
@@ -100,6 +103,7 @@ export const DEFAULT_GRANTS: Record<Role, Grants> = {
     pay_terms: 'view',
     contracts: 'view',
     tax_bank: 'review',
+    documents: 'review',
   },
 }
 
@@ -124,14 +128,16 @@ export const GUEST_EMAIL = 'guest@demo.invalid'
 export const GUEST_SESSION_SECONDS = 2 * 60 * 60
 
 /**
- * What a guest can see: the roster, contacts, pay, contracts, travel and
- * housing, read-only. Never Personal ID, Travel ID or Tax and bank docs.
+ * What a guest can see: the roster, contacts, pay, contracts, the document
+ * checklist's statuses, travel and housing, read-only. Never Personal ID,
+ * Travel ID or Tax and bank docs (so never an uploaded form).
  */
 export const GUEST_GRANTS: Grants = {
   general: 'view',
   contact: 'view',
   pay_terms: 'view',
   contracts: 'view',
+  documents: 'view',
   travel_logistics: 'view',
   housing_access: 'view',
   comps: 'view',

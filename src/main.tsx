@@ -14,6 +14,7 @@ import { ConnectionsPage } from './pages/ConnectionsPage'
 import { ContractPage, ContractSettingsPage, ProductionContractsPage } from './pages/ContractPages'
 import { ConnectPage } from './pages/ConnectPage'
 import { DemoPage } from './pages/DemoPage'
+import { DocumentSettingsPage, DocumentsPage, ProductionDocumentsPage, UploadPage } from './pages/DocumentPages'
 import { DraftsPage } from './pages/DraftsPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
@@ -32,6 +33,8 @@ import { RequireStaff } from './pages/RequireStaff'
 import './styles.css'
 
 const router = createBrowserRouter([
+  // Opened from an upload link by someone with no account: no app chrome.
+  { path: '/upload/:token', element: <UploadPage /> },
   {
     element: <Layout />,
     children: [
@@ -52,6 +55,9 @@ const router = createBrowserRouter([
           { path: '/productions/:productionId/contracts', element: <ProductionContractsPage /> },
           { path: '/contracts/settings', element: <ContractSettingsPage /> },
           { path: '/contracts/:contractId', element: <ContractPage /> },
+          { path: '/productions/:productionId/documents', element: <ProductionDocumentsPage /> },
+          { path: '/documents', element: <DocumentsPage /> },
+          { path: '/documents/settings', element: <DocumentSettingsPage /> },
           { path: '/arrivals', element: <ArrivalsPage /> },
           { path: '/housing', element: <HousingPage /> },
           { path: '/people', element: <PeoplePage /> },

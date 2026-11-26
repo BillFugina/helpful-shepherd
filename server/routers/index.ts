@@ -8,6 +8,7 @@ import { arrivalsRouter } from './arrivals.js'
 import { auditRouter } from './audit.js'
 import { connectionsRouter } from './connections.js'
 import { contractsRouter } from './contracts.js'
+import { documentsRouter, uploadLinkRouter } from './documents.js'
 import { draftsRouter } from './drafts.js'
 import { engagementsRouter } from './engagements.js'
 import { housingRouter } from './housing.js'
@@ -44,6 +45,9 @@ export const appRouter = router({
   drafts: draftsRouter,
   connections: connectionsRouter,
   contracts: contractsRouter,
+  documents: documentsRouter,
+  /** The page behind an upload link. Public: the link is the key. */
+  uploadLink: uploadLinkRouter,
 })
 
 export type AppRouter = typeof appRouter
