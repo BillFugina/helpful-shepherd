@@ -45,7 +45,7 @@ describe('default grants match the plan', () => {
 
   it('keeps Finance out of travel IDs, travel logistics, housing and comps', () => {
     const f = DEFAULT_GRANTS.finance_manager
-    for (const g of ['travel_id', 'travel_logistics', 'housing_access', 'comps'] as const) {
+    for (const g of ['travel_id', 'travel_logistics', 'housing', 'housing_access', 'comps'] as const) {
       expect(levelFor(f, g)).toBe('none')
     }
     expect(f.tax_bank).toBe('review')

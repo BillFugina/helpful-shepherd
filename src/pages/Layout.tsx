@@ -10,7 +10,7 @@ export function Layout() {
   const navigate = useNavigate()
   const guest = me.data?.guest === true
   const staff = guest || (me.data?.twoFactorEnabled && me.data.role)
-  const sees = (group: 'travel_logistics' | 'housing_access' | 'contracts' | 'documents') =>
+  const sees = (group: 'travel_logistics' | 'housing' | 'contracts' | 'documents') =>
     levelAtLeast(levelFor(me.data?.grants ?? {}, group), 'view')
 
   async function signOut() {
@@ -42,7 +42,7 @@ export function Layout() {
                 <NavLink to="/drafts">Drafts</NavLink>
               ) : null}
               {sees('travel_logistics') ? <NavLink to="/arrivals">Arrivals</NavLink> : null}
-              {sees('housing_access') ? <NavLink to="/housing">Housing</NavLink> : null}
+              {sees('housing') ? <NavLink to="/housing">Housing</NavLink> : null}
               {sees('contracts') ? <NavLink to="/contracts/settings">Contracts</NavLink> : null}
               {sees('documents') ? <NavLink to="/documents">Documents</NavLink> : null}
               {me.data?.role === ADMIN_ROLE ? (

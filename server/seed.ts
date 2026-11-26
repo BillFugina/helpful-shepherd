@@ -302,7 +302,26 @@ const DEMO_HOUSING = [
       { name: 'Back bedroom', floor: 1, bathroom: 'Guest bath' },
     ],
   },
+  {
+    name: 'Downtown suites (demo)',
+    kind: 'hotel' as const,
+    address: '400 Demo Avenue, Raleigh, NC',
+    accessNotes: 'Check in at the front desk under the theater’s name (demo).',
+    doorCode: null,
+    rooms: [
+      { name: 'Suite 410', floor: 4, bathroom: 'Suite 410 bath' },
+      { name: 'Suite 412', floor: 4, bathroom: 'Suite 412 bath' },
+    ],
+  },
 ] as const
+
+/**
+ * Gaps in the demo housing, so the plan has something to show: on the last
+ * production the fourth and fifth people have no room yet, and on the fourth
+ * production the second person's room starts two nights after they arrive.
+ */
+const UNHOUSED = (k: number, j: number) => k === 4 && j >= 3
+const LATE_START = (k: number, j: number) => k === 3 && j === 1
 
 /** Housing rules, by person index. Set so the second production shows warnings. */
 const DEMO_PREFERENCES = [
@@ -557,11 +576,11 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       }
       // Productions don't overlap, so each one fills the rooms from the top.
       const roomIndex = engagementRows.slice(k * SLOTS.length, n).filter((r) => r.housingProvided).length
-      if (row.housingProvided && rooms[roomIndex]) {
+      if (row.housingProvided && rooms[roomIndex] && !UNHOUSED(k, j)) {
         stayRows.push({
           engagementId,
           roomId: rooms[roomIndex].id,
-          startsOn: row.preferredArrival!,
+          startsOn: LATE_START(k, j) ? addDays(row.preferredArrival!, 2) : row.preferredArrival!,
           // One stay ends a night early, to show the flies-home-after-housing warning.
           endsOn: k === 2 && j === 2 ? addDays(row.preferredDeparture!, -1) : row.preferredDeparture!,
         })

@@ -90,7 +90,8 @@ export const arrivalsRouter = router({
     const date = input.date ?? localDate(now, THEATRE_TZ)
     const { start, end } = dayBounds(date, THEATRE_TZ)
     const seeContact = can(ctx.grants, 'contact')
-    const seeHousing = can(ctx.grants, 'housing_access')
+    const seeHousing = can(ctx.grants, 'housing')
+    const seeAccess = can(ctx.grants, 'housing_access')
 
     const stored = await ctx.db
       .select()
@@ -223,9 +224,9 @@ export const arrivalsRouter = router({
             ? {
                 unit: stay.unitName,
                 room: stay.roomName,
-                address: stay.address,
+                address: seeAccess ? stay.address : null,
                 // Made up, but a public demo still shouldn't show one.
-                doorCode: ctx.guest ? null : stay.doorCode,
+                doorCode: seeAccess && !ctx.guest ? stay.doorCode : null,
               }
             : null
           : undefined,

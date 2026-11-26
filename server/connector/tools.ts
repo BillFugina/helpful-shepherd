@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { localDate, THEATRE_TZ } from '../../shared/time.js'
 import { DOCUMENT_STATUS_LABELS, DOCUMENT_TYPE_LABELS } from '../../shared/documents.js'
 import { CONTRACT_TYPES } from '../../shared/roster.js'
+import { COVERAGE_STATUS_LABELS } from '../../shared/travel.js'
 import { loadAccess } from '../access.js'
 import { recordAudit } from '../audit.js'
 import type { Db } from '../db/client.js'
@@ -152,7 +153,7 @@ export const CONNECTOR_TOOLS = {
   person_card: define({
     title: 'Person card',
     description:
-      "One person's card for one production: contacts, role and deal terms their role can see, agent, conflicts, flights and rental car. Takes an engagementId (one person on one production).",
+      "One person's card for one production: contacts, role and deal terms their role can see, agent, conflicts, flights, rental car and housing (place, room and dates, never the address or door code). Takes an engagementId (one person on one production).",
     input: z.object({ engagementId: uuid('engagement') }),
     readOnly: true,
     run: async (args, env) => {
@@ -170,6 +171,19 @@ export const CONNECTOR_TOOLS = {
         conflicts: deal.conflicts,
         flights: itinerary.flights,
         cars: itinerary.cars,
+        housing: itinerary.housing
+          ? {
+              coverage: itinerary.housing.coverage,
+              need: itinerary.housing.need,
+              stays: itinerary.housing.stays.map((s) => ({
+                place: s.unit.name ?? null,
+                room: s.room.name ?? null,
+                firstNight: s.startsOn ?? null,
+                moveOutDay: s.endsOn ?? null,
+              })),
+              warnings: itinerary.housing.warnings.map((w) => w.message),
+            }
+          : undefined,
         preferences: itinerary.preferences,
       }
       return { data, audit: { recordId: args.engagementId, personId: itinerary.person.id } }
@@ -288,10 +302,39 @@ export const CONNECTOR_TOOLS = {
     },
   }),
 
+  housing_plan: define({
+    title: 'Housing plan',
+    description:
+      'Where everyone on one production stays: for each person, the place and room with first night and move-out day, the nights they need (from their flights, else the dates they asked for, else the production dates), and anything still missing: no room yet, missing nights, or no dates to go on. Warnings cover shared bathrooms, floors and flights outside a stay. Place and room names only, never an address, door code or how to get in. Read-only; rooms are assigned in the app.',
+    input: z.object({ productionId: uuid('production') }),
+    readOnly: true,
+    run: async (args, env) => {
+      const d = await callerFor(env).housing.plan({ productionId: args.productionId })
+      const people = d.people.map((p) => ({
+        engagementId: p.engagementId,
+        name: p.name,
+        role: p.role,
+        housingProvided: p.housingProvided,
+        status: COVERAGE_STATUS_LABELS[p.coverage.status],
+        needs: p.need ? { firstNight: p.need.from, moveOutDay: p.need.to, basedOn: p.need.source } : null,
+        missingNights: p.coverage.missing.map((r) => ({ firstNight: r.from, moveOutDay: r.to })),
+        stays: p.stays.map((s) => ({
+          place: s.unitName,
+          room: s.roomName,
+          firstNight: s.startsOn,
+          moveOutDay: s.endsOn,
+        })),
+        warnings: p.warnings,
+      }))
+      const data = { production: d.production.title, counts: d.counts, people }
+      return { data, audit: { recordId: args.productionId, detail: { count: people.length } } }
+    },
+  }),
+
   arrivals_board: define({
     title: 'Arrivals board',
     description:
-      'Who lands and who leaves on a travel day, with live flight status, rental cars, people expected with no flight logged yet, and flight alerts. Dates are theatre-local (Raleigh). Omit date for today; the result also gives the next travel day.',
+      'Who lands and who leaves on a travel day, with live flight status, rental cars, where each person sleeps that night (place and room only), people expected with no flight logged yet, and flight alerts. Dates are theatre-local (Raleigh). Omit date for today; the result also gives the next travel day.',
     input: z.object({ date: isoDate.optional().describe('YYYY-MM-DD. Leave out for today.') }),
     readOnly: true,
     run: async (args, env) => {

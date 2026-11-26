@@ -31,6 +31,7 @@ export const FIELD_GROUPS = [
   'tax_bank',
   'documents',
   'travel_logistics',
+  'housing',
   'housing_access',
   'comps',
 ] as const
@@ -46,7 +47,8 @@ export const FIELD_GROUP_LABELS: Record<FieldGroup, string> = {
   tax_bank: 'Tax and bank docs',
   documents: 'Document checklist (statuses, no files)',
   travel_logistics: 'Travel logistics (flights, cars)',
-  housing_access: 'Housing access (address, door code)',
+  housing: 'Housing (places, rooms, who stays when)',
+  housing_access: 'Housing access (address, door code, getting in)',
   comps: 'Comps (Phase 2)',
 }
 
@@ -93,6 +95,7 @@ export const DEFAULT_GRANTS: Record<Role, Grants> = {
     tax_bank: 'edit',
     documents: 'edit',
     travel_logistics: 'edit',
+    housing: 'edit',
     housing_access: 'edit',
     comps: 'edit',
   },
@@ -139,6 +142,7 @@ export const GUEST_GRANTS: Grants = {
   contracts: 'view',
   documents: 'view',
   travel_logistics: 'view',
+  housing: 'view',
   housing_access: 'view',
   comps: 'view',
 }
