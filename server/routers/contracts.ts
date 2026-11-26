@@ -12,6 +12,7 @@ import {
   mergeBody,
   ORGANIZATION_FIELDS,
   organizationInput,
+  overridableNames,
   overrideProblem,
   prepareContractsInput,
   saveTextTemplateInput,
@@ -152,10 +153,18 @@ async function insertTemplateVersion(
     // A new family's id is its first version's id, so the family is easy to find.
     await tx.update(contractTemplate).set({ familyId: row!.id }).where(eq(contractTemplate.id, row!.id))
   } else {
-    await tx
-      .update(contract)
-      .set({ templateId: row!.id })
+    // Drafts move to the new version, dropping anything typed over a field
+    // or token it no longer has.
+    const allowed = overridableNames({ format: values.format as TemplateFormat, body: values.body ?? null })
+    const drafts = await tx
+      .select({ id: contract.id, overrides: contract.overrides })
+      .from(contract)
       .where(and(eq(contract.templateFamilyId, row!.familyId), eq(contract.status, 'draft')))
+      .for('update')
+    for (const d of drafts) {
+      const overrides = Object.fromEntries(Object.entries(d.overrides).filter(([name]) => allowed.has(name)))
+      await tx.update(contract).set({ templateId: row!.id, overrides }).where(eq(contract.id, d.id))
+    }
   }
   await auditTemplate(
     tx,
@@ -286,9 +295,12 @@ const templatesRouter = router({
  */
 function visibleOverrides(row: { contract: ContractRow; template: TemplateRow }, grants: Grants) {
   if (!sees(grants, 'pay_terms')) return undefined
-  if (sees(grants, 'contact')) return row.contract.overrides
-  const contactNames = contactFieldNames({ format: row.template.format as TemplateFormat, body: row.template.body })
-  return Object.fromEntries(Object.entries(row.contract.overrides).filter(([name]) => !contactNames.has(name)))
+  const template = { format: row.template.format as TemplateFormat, body: row.template.body }
+  // Only names this version can take: one left over from an older version
+  // (an {{employee.email}} since removed, say) is never shown.
+  const allowed = overridableNames(template)
+  if (!sees(grants, 'contact')) for (const name of contactFieldNames(template)) allowed.delete(name)
+  return Object.fromEntries(Object.entries(row.contract.overrides).filter(([name]) => allowed.has(name)))
 }
 
 type ContractRow = typeof contract.$inferSelect

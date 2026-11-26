@@ -420,4 +420,28 @@ describe.skipIf(!url)('contracts against Postgres', () => {
     const [saved] = await db.select({ overrides: contract.overrides }).from(contract).where(eq(contract.id, sdc!.id))
     expect(saved!.overrides).toEqual({ 'Check Box2': 'yes', 'Email Address': 'typed@example.com' })
   })
+
+  it('drops what was typed over a token a new template version no longer has', async () => {
+    const letter = await asCm().contracts.templates.saveText({
+      name: `Letter ${tag}`,
+      contractType: 'sdc',
+      body: 'Dear {{employee.name}} at {{employee.email}}, you are our {{role}}.',
+    })
+    templateIds.push(letter.id)
+    await prepare(directorId)
+    const draft = (await contractsOf(directorId)).find((c) => c.templateId === letter.id)!
+    await asCm().contracts.setOverrides({
+      id: draft.id,
+      overrides: { 'employee.email': 'old@example.com', role: 'Stager' },
+    })
+    const v2 = await asCm().contracts.templates.saveText({
+      name: `Letter ${tag}`,
+      contractType: 'sdc',
+      body: 'Dear {{employee.name}}, you are our {{role}}.',
+      replacesId: letter.id,
+    })
+    templateIds.push(v2.id)
+    const [moved] = await db.select().from(contract).where(eq(contract.id, draft.id))
+    expect(moved).toMatchObject({ templateId: v2.id, overrides: { role: 'Stager' } })
+  })
 })

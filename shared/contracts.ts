@@ -683,6 +683,12 @@ export function contactFieldNames(template: { format: TemplateFormat; body: stri
   return new Set(FORM_FIELDS[template.format].filter((f) => f.contact).map((f) => f.name))
 }
 
+/** The names an override may set on a template (Personal ID and the tier math can't be typed over). */
+export function overridableNames(template: { format: TemplateFormat; body: string | null }): Set<string> {
+  if (template.format === 'text') return new Set(tokensIn(template.body ?? '').filter(isToken))
+  return new Set(FORM_FIELDS[template.format].filter((f) => !f.personal && !f.computed).map((f) => f.name))
+}
+
 /** Required fields that would go out blank. A contract can't be marked sent until this is empty. */
 export function blankFields(fields: readonly ResolvedField[]): ResolvedField[] {
   return fields.filter((f) => f.required && !f.value.trim())
