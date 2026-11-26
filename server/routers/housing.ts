@@ -20,7 +20,7 @@ import {
 import type { Db } from '../db/client.js'
 import { engagement, housingAssignment, housingPreference, housingRoom, housingUnit, person } from '../db/schema.js'
 import { staysInWindow } from '../travel/housing.js'
-import { housingRoomRecord, housingUnitRecord, shortName } from '../travel/records.js'
+import { housingRoomRecord, housingUnitRecord, shortName, withoutAccessForGuest } from '../travel/records.js'
 import { router, staffProcedure } from '../trpc.js'
 import { auditChange, friendly, requireEdit, requireView, writtenKeys } from '../writes.js'
 import { engagementOrThrow } from './travel.js'
@@ -81,7 +81,7 @@ export const housingRouter = router({
     const units = await ctx.db.select().from(housingUnit).orderBy(asc(housingUnit.name))
     const rooms = await ctx.db.select().from(housingRoom).orderBy(asc(housingRoom.floor), asc(housingRoom.name))
     return units.map((u) => ({
-      ...filterRecord(housingUnitRecord(u), HOUSING_UNIT_FIELDS, ctx.grants),
+      ...withoutAccessForGuest(filterRecord(housingUnitRecord(u), HOUSING_UNIT_FIELDS, ctx.grants), ctx.guest),
       rooms: rooms
         .filter((r) => r.unitId === u.id)
         .map((r) => filterRecord(housingRoomRecord(r), HOUSING_ROOM_FIELDS, ctx.grants)),

@@ -1,6 +1,7 @@
 import { requireMcpAuth } from '@better-auth/mcp'
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server'
 import { eq } from 'drizzle-orm'
+import { isGuestUserId } from '../shared/access.js'
 import { APP_NAME, auth, connectorResource } from './auth.js'
 import { isConnected } from './connector/connections.js'
 import { CONNECTOR_TOOLS, runConnectorTool, type ConnectorToolName, type ToolEnv } from './connector/tools.js'
@@ -105,6 +106,8 @@ export async function handleMcp(request: Request): Promise<Response> {
         const userId = typeof claims.sub === 'string' ? claims.sub : null
         const clientId = typeof claims.azp === 'string' ? claims.azp : null
         if (!userId || !clientId) return signInAgain('The access token is missing its user or app.')
+        // The guest demo can't connect an app (consent needs two-factor); refuse here too.
+        if (isGuestUserId(userId)) return signInAgain('The guest demo has no connector access.')
         const user = await loadUser(userId)
         if (!user) return signInAgain('That account no longer exists.')
         // Disconnecting in the app removes the consent; tokens stop working at once.

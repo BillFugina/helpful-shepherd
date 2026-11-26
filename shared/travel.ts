@@ -234,7 +234,20 @@ export const setPreferenceInput = z.object({
   note: optionalText(300),
 })
 
-export const boardInput = z.object({ date: isoDate.optional() })
+export const boardInput = z.object({
+  date: isoDate.optional(),
+  /**
+   * The guest demo's own clock: milliseconds from real time. Each guest keeps
+   * theirs in the browser, and the server works the feed out for that moment
+   * without saving anything. Staff use the shared demo clock and this is ignored.
+   */
+  clockOffsetMs: z
+    .number()
+    .int()
+    .min(-10 * 365 * 86_400_000)
+    .max(10 * 365 * 86_400_000)
+    .optional(),
+})
 export const occupancyInput = z.object({ from: isoDate, days: z.number().int().min(1).max(62) })
 export const setClockInput = z.object({ at: z.iso.datetime({ offset: true }) })
 

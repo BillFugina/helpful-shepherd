@@ -15,6 +15,7 @@ import {
   rentalCar,
 } from '../db/schema.js'
 import { flightProvider } from '../flights/provider.js'
+import { replayFlight } from '../flights/replay.js'
 import { clockOffsetMs, feedNow, setDemoClock, trackFlights } from '../flights/track.js'
 import { shortName } from '../travel/records.js'
 import { adminProcedure, router, staffProcedure } from '../trpc.js'
@@ -73,12 +74,17 @@ export const arrivalsRouter = router({
   board: staffProcedure.input(boardInput).query(async ({ ctx, input }) => {
     requireView(ctx.grants, 'travel_logistics')
     const provider = flightProvider()
-    const now = await feedNow(ctx.db, provider)
-    try {
-      await trackFlights(ctx.db, provider, now)
-    } catch (error) {
-      // The board still shows what it knows if the feed has a bad moment.
-      console.error('flight tracker failed', error)
+    // A guest brings their own demo clock and never runs the tracker, which
+    // writes: their board is worked out from the feed in memory (replayFlight).
+    const guestClock = ctx.guest && provider.usesDemoClock ? input.clockOffsetMs : undefined
+    const now = guestClock !== undefined ? new Date(Date.now() + guestClock) : await feedNow(ctx.db, provider)
+    if (!ctx.guest) {
+      try {
+        await trackFlights(ctx.db, provider, now)
+      } catch (error) {
+        // The board still shows what it knows if the feed has a bad moment.
+        console.error('flight tracker failed', error)
+      }
     }
 
     const date = input.date ?? localDate(now, THEATRE_TZ)
@@ -86,7 +92,7 @@ export const arrivalsRouter = router({
     const seeContact = can(ctx.grants, 'contact')
     const seeHousing = can(ctx.grants, 'housing_access')
 
-    const flights = await ctx.db
+    const stored = await ctx.db
       .select()
       .from(flight)
       .where(
@@ -100,6 +106,8 @@ export const arrivalsRouter = router({
         ),
       )
       .orderBy(asc(flight.scheduledArrival))
+    const replays = ctx.guest ? new Map(stored.map((f) => [f.id, replayFlight(f, now)])) : null
+    const flights = replays ? stored.map((f) => ({ ...f, ...replays.get(f.id)!.live })) : stored
 
     // Everyone expected that day, flight or not.
     const expected = await ctx.db
@@ -184,15 +192,20 @@ export const arrivalsRouter = router({
         : []
 
     const flightIds = flights.map((f) => f.id)
-    const alerts = flightIds.length
-      ? await ctx.db
-          .select({ event: flightEvent, flightId: flight.id })
-          .from(flightEvent)
-          .innerJoin(flight, eq(flight.id, flightEvent.flightId))
-          .where(inArray(flightEvent.flightId, flightIds))
-          .orderBy(desc(flightEvent.at))
-          .limit(30)
-      : []
+    const alerts = replays
+      ? [...replays]
+          .flatMap(([flightId, r]) => r.events.map((e, i) => ({ event: { id: `${flightId}-${i}`, ...e }, flightId })))
+          .sort((a, b) => b.event.at.getTime() - a.event.at.getTime())
+          .slice(0, 30)
+      : flightIds.length
+        ? await ctx.db
+            .select({ event: flightEvent, flightId: flight.id })
+            .from(flightEvent)
+            .innerJoin(flight, eq(flight.id, flightEvent.flightId))
+            .where(inArray(flightEvent.flightId, flightIds))
+            .orderBy(desc(flightEvent.at))
+            .limit(30)
+        : []
 
     const entry = (id: string) => {
       const p = people.find((x) => x.engagementId === id)!
@@ -207,7 +220,13 @@ export const arrivalsRouter = router({
         cell: seeContact ? p.cell : undefined,
         housingTonight: seeHousing
           ? stay
-            ? { unit: stay.unitName, room: stay.roomName, address: stay.address, doorCode: stay.doorCode }
+            ? {
+                unit: stay.unitName,
+                room: stay.roomName,
+                address: stay.address,
+                // Made up, but a public demo still shouldn't show one.
+                doorCode: ctx.guest ? null : stay.doorCode,
+              }
             : null
           : undefined,
       }
@@ -230,7 +249,7 @@ export const arrivalsRouter = router({
       clock: {
         provider: provider.name,
         usesDemoClock: provider.usesDemoClock,
-        offsetMs: provider.usesDemoClock ? await clockOffsetMs(ctx.db) : 0,
+        offsetMs: !provider.usesDemoClock ? 0 : (guestClock ?? (await clockOffsetMs(ctx.db))),
       },
       arrivals: byEngagement('arrival'),
       departures: byEngagement('departure'),

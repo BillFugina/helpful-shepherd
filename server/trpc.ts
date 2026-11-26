@@ -1,9 +1,18 @@
 import { initTRPC, TRPCError } from '@trpc/server'
 import superjson from 'superjson'
 import { ZodError } from 'zod'
-import { ADMIN_ROLE, NEVER_OVER_CONNECTOR, type Grants } from '../shared/access.js'
+import {
+  ADMIN_ROLE,
+  GUEST_GRANTS,
+  GUEST_ROLE,
+  isGuestUserId,
+  NEVER_OVER_CONNECTOR,
+  type Grants,
+  type ViewerRole,
+} from '../shared/access.js'
 import { loadAccess } from './access.js'
 import type { Db } from './db/client.js'
+import { guestDemoClosed } from './demo/guest.js'
 
 export interface SessionUser {
   id: string
@@ -38,6 +47,8 @@ export const FORBIDDEN_REASONS = {
   noRole: 'NO_ROLE',
   adminOnly: 'ADMIN_ONLY',
   readOnlyConnector: 'CONNECTOR_READ_ONLY',
+  demoReadOnly: 'DEMO_READ_ONLY',
+  demoClosed: 'DEMO_CLOSED',
 } as const
 
 const t = initTRPC.context<Context>().create({
@@ -57,8 +68,13 @@ export const router = t.router
 export const createCallerFactory = t.createCallerFactory
 export const publicProcedure = t.procedure
 
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = t.procedure.use(({ ctx, next, type }) => {
   if (!ctx.user) throw new TRPCError({ code: 'UNAUTHORIZED' })
+  // The public guest demo only reads. This is the one gate every mutation
+  // passes, so nothing a guest sends can change data, whatever the UI shows.
+  if (isGuestUserId(ctx.user.id) && type !== 'query') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.demoReadOnly })
+  }
   return next({ ctx: { ...ctx, user: ctx.user } })
 })
 
@@ -67,6 +83,18 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
  * staff role. The role's grants ride along in ctx for the field filter.
  */
 export const staffProcedure = protectedProcedure.use(async ({ ctx, next, type }) => {
+  // The guest demo: no password and no second factor, so fixed read-only
+  // grants that never include the masked groups (see shared/access.ts).
+  if (isGuestUserId(ctx.user.id)) {
+    if (ctx.via === 'connector' || type !== 'query') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.demoReadOnly })
+    }
+    // Turned off, or the database holds real records: closed for open guest sessions too.
+    if (await guestDemoClosed(ctx.db)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.demoClosed })
+    }
+    return next({ ctx: { ...ctx, role: GUEST_ROLE as ViewerRole, grants: GUEST_GRANTS, guest: true } })
+  }
   if (!ctx.user.twoFactorEnabled) {
     throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.twoFactorRequired })
   }
@@ -77,7 +105,7 @@ export const staffProcedure = protectedProcedure.use(async ({ ctx, next, type })
   const access = await loadAccess(ctx.db, ctx.user.id)
   if (!access) throw new TRPCError({ code: 'FORBIDDEN', message: FORBIDDEN_REASONS.noRole })
   const grants = ctx.via === 'connector' ? connectorGrants(access.grants) : access.grants
-  return next({ ctx: { ...ctx, role: access.role, grants } })
+  return next({ ctx: { ...ctx, role: access.role as ViewerRole, grants, guest: false } })
 })
 
 export const adminProcedure = staffProcedure.use(({ ctx, next }) => {

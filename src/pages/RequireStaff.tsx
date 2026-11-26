@@ -6,6 +6,8 @@ export function RequireStaff() {
   const me = useMe()
   if (me.isPending) return <p className="muted">Loading…</p>
   if (!me.data) return <Navigate to="/sign-in" replace />
+  // The guest demo has no second factor; the server keeps it read-only.
+  if (me.data.guest) return <Outlet />
   if (!me.data.twoFactorEnabled) return <Navigate to="/setup-2fa" replace />
   if (!me.data.role) {
     return <p>Your account doesn't have a role yet, so there's nothing to show. Ask the Company Manager to add you.</p>

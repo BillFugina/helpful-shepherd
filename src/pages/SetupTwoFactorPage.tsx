@@ -23,6 +23,7 @@ export function SetupTwoFactorPage() {
 
   if (me.isPending) return <p className="muted">Loading…</p>
   if (!me.data) return <Navigate to="/sign-in" replace />
+  if (me.data.guest) return <Navigate to="/" replace />
   if (me.data.twoFactorEnabled && step.kind !== 'backup-codes') return <Navigate to="/" replace />
 
   async function start(e: React.FormEvent) {

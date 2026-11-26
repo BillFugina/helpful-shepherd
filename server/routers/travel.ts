@@ -37,6 +37,7 @@ import {
   housingRoomRecord,
   housingUnitRecord,
   rentalCarRecord,
+  withoutAccessForGuest,
 } from '../travel/records.js'
 import { router, staffProcedure } from '../trpc.js'
 import { auditChange, friendly, requireEdit, requireView } from '../writes.js'
@@ -141,7 +142,10 @@ export const travelRouter = router({
         stays: stays.map((s) => ({
           ...filterRecord(housingAssignmentRecord(s.assignment), HOUSING_ASSIGNMENT_FIELDS, ctx.grants),
           room: filterRecord(housingRoomRecord(s.room), HOUSING_ROOM_FIELDS, ctx.grants),
-          unit: filterRecord(housingUnitRecord(s.unit), HOUSING_UNIT_FIELDS, ctx.grants),
+          unit: withoutAccessForGuest(
+            filterRecord(housingUnitRecord(s.unit), HOUSING_UNIT_FIELDS, ctx.grants),
+            ctx.guest,
+          ),
         })),
         warnings,
       }
