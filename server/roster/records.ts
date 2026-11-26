@@ -17,7 +17,7 @@ import type { agent, conflict, engagement, production, season } from '../db/sche
  * excess property, and a registry field the table doesn't have is `never`.
  */
 
-type RecordOf<Row, Fields> = { [K in keyof Fields]: K extends keyof Row ? Row[K] : never }
+export type RecordOf<Row, Fields> = { [K in keyof Fields]: K extends keyof Row ? Row[K] : never }
 
 export type SeasonRecord = RecordOf<typeof season.$inferSelect, typeof SEASON_FIELDS>
 export type ProductionRecord = RecordOf<typeof production.$inferSelect, typeof PRODUCTION_FIELDS>

@@ -56,6 +56,39 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   edit on its group) and lands in the audit log, one event per group touched,
   with field names and never values.
 
+## What's here (arrivals)
+
+- **Travel per engagement** (Travel and housing, from an engagement): flights
+  typed in each airport's local time and stored as instants, and rental cars
+  in Raleigh time. A flight that's rebooked loses its old live status.
+- **Arrivals board** (`/arrivals`): who lands and leaves on one day, with live
+  status, gate, baggage claim, car pickup, where they sleep tonight, Call and
+  Text buttons, and Mark arrived. People expected that day with no flight
+  logged are listed too. It refreshes every minute and works on a phone.
+- **Simulated flight feed.** No paid API: `server/flights/provider.ts` sits
+  behind the same adapter a real feed (AeroDataBox, per the plan) would use.
+  What happens to a flight depends on the last digit of its number: 9
+  cancelled, 7 late by 45 minutes, 4 late by 95, 3 gate change, 1 lands 12
+  minutes early, anything else on time. Changes are logged as alerts.
+- **Demo clock.** The demo season is in 2027, so the Company Manager can start
+  a travel day at 6 AM and step it forward an hour at a time. Moving the clock
+  clears what the feed said; the board fills in again for the new moment.
+- **Housing** (`/housing`): places and rooms (floor, and a bathroom name; rooms
+  with the same bathroom name share it), a four-week calendar of who sleeps
+  where, and assignment from each person's travel page. A room can't be
+  double-booked. Housing needs (own bathroom, ground floor) and travel that
+  starts before or ends after a stay show as warnings, never blocks.
+- Finance has no travel or housing access by default, matching the plan.
+- Demo data: flights and cars for everyone the theater flies in, three made-up
+  places with seven rooms, stays for each production, and two housing needs
+  that trip warnings in the second production. The first travel day is Jan 10,
+  2027, with a delay, a gate change and an early landing.
+
+**Not yet:** the plan runs the flight tracker on a schedule (Inngest) with
+phone push alerts and an "arriving tomorrow" summary. Here the tracker runs
+when someone looks at the board, throttled to once a minute per flight. The
+scheduled job needs an Inngest account and push keys.
+
 ## Local setup
 
 ```sh

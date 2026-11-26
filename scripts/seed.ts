@@ -49,6 +49,9 @@ const counts = await reseedDemo(db)
 console.info(
   `[seed] demo roster: ${counts.people} people, ${counts.agents} agents, ${counts.productions} productions, ${counts.engagements} engagements, ${counts.conflicts} conflicts`,
 )
+console.info(
+  `[seed] demo travel: ${counts.flights} flights, ${counts.cars} rental cars, ${counts.housingUnits} places with ${counts.rooms} rooms, ${counts.stays} stays`,
+)
 if (generated) {
   console.info(`[seed] demo password (shown once, not stored anywhere): ${password}`)
 }

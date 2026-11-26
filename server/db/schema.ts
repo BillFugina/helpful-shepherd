@@ -18,6 +18,13 @@ import {
 } from 'drizzle-orm/pg-core'
 import { ACCESS_LEVELS, AUDIT_ACTIONS, FIELD_GROUPS, ROLES } from '../../shared/access.js'
 import { CONTRACT_TYPES, PIPELINE_STATUSES, PROGRAMS } from '../../shared/roster.js'
+import {
+  FLIGHT_DIRECTIONS,
+  FLIGHT_EVENT_KINDS,
+  HOUSING_KINDS,
+  HOUSING_RULES,
+  LIVE_STATUSES,
+} from '../../shared/travel.js'
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -358,4 +365,172 @@ export const conflict = pgTable(
     index('conflict_engagement_id_idx').on(t.engagementId),
     check('conflict_dates_in_order', sql`${t.startsOn} <= ${t.endsOn}`),
   ],
+)
+
+// ---------------------------------------------------------------------------
+// Arrivals: flights, rental cars and housing. Field groups for every column
+// are in shared/travel.ts.
+// ---------------------------------------------------------------------------
+
+export const flightDirection = pgEnum('flight_direction', FLIGHT_DIRECTIONS)
+export const liveStatus = pgEnum('flight_live_status', LIVE_STATUSES)
+export const flightEventKind = pgEnum('flight_event_kind', FLIGHT_EVENT_KINDS)
+export const housingKind = pgEnum('housing_kind', HOUSING_KINDS)
+export const housingRule = pgEnum('housing_rule', HOUSING_RULES)
+
+/**
+ * One leg of someone's travel. Scheduled times are what was booked; the live_*
+ * columns are written only by the flight tracker, so a delay never overwrites
+ * the booking.
+ */
+export const flight = pgTable(
+  'flight',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    direction: flightDirection('direction').notNull(),
+    airline: text('airline').notNull(),
+    flightNumber: text('flight_number').notNull(),
+    fromAirport: text('from_airport').notNull(),
+    toAirport: text('to_airport').notNull(),
+    scheduledDeparture: timestamp('scheduled_departure', { withTimezone: true }).notNull(),
+    scheduledArrival: timestamp('scheduled_arrival', { withTimezone: true }).notNull(),
+    confirmation: text('confirmation'),
+    bookingSource: text('booking_source'),
+    notes: text('notes'),
+    liveStatus: liveStatus('live_status'),
+    liveDeparture: timestamp('live_departure', { withTimezone: true }),
+    liveArrival: timestamp('live_arrival', { withTimezone: true }),
+    liveGate: text('live_gate'),
+    liveTerminal: text('live_terminal'),
+    liveBaggage: text('live_baggage'),
+    liveCheckedAt: timestamp('live_checked_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('flight_engagement_id_idx').on(t.engagementId),
+    index('flight_scheduled_arrival_idx').on(t.scheduledArrival),
+    index('flight_scheduled_departure_idx').on(t.scheduledDeparture),
+    check('flight_departs_before_arriving', sql`${t.scheduledDeparture} < ${t.scheduledArrival}`),
+  ],
+)
+
+/** What the tracker noticed changing on a flight, for the board's alerts. */
+export const flightEvent = pgTable(
+  'flight_event',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    flightId: uuid('flight_id')
+      .notNull()
+      .references(() => flight.id, { onDelete: 'cascade' }),
+    /** The feed's time when the change was seen (the demo clock, when it's moved). */
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    kind: flightEventKind('kind').notNull(),
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
+  },
+  (t) => [index('flight_event_flight_id_idx').on(t.flightId, t.at)],
+)
+
+export const rentalCar = pgTable(
+  'rental_car',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    company: text('company').notNull(),
+    confirmation: text('confirmation'),
+    pickupAt: timestamp('pickup_at', { withTimezone: true }).notNull(),
+    pickupPlace: text('pickup_place'),
+    returnAt: timestamp('return_at', { withTimezone: true }).notNull(),
+    returnPlace: text('return_place'),
+    notes: text('notes'),
+    ...timestamps,
+  },
+  (t) => [
+    index('rental_car_engagement_id_idx').on(t.engagementId),
+    check('rental_car_pickup_before_return', sql`${t.pickupAt} < ${t.returnAt}`),
+  ],
+)
+
+export const housingUnit = pgTable('housing_unit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  kind: housingKind('kind').notNull(),
+  address: text('address'),
+  accessNotes: text('access_notes'),
+  doorCode: text('door_code'),
+  notes: text('notes'),
+  isDemo: boolean('is_demo').notNull().default(false),
+  ...timestamps,
+})
+
+/** Assignments point at a room, and each room names its bathroom, so "won't share a bathroom" can be checked. */
+export const housingRoom = pgTable(
+  'housing_room',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    unitId: uuid('unit_id')
+      .notNull()
+      .references(() => housingUnit.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    floor: integer('floor').notNull().default(1),
+    bathroom: text('bathroom').notNull(),
+    ...timestamps,
+  },
+  (t) => [index('housing_room_unit_id_idx').on(t.unitId), unique('housing_room_unit_name_uq').on(t.unitId, t.name)],
+)
+
+/** One person in one room from move-in night to move-out day. The app refuses two stays in a room on the same night. */
+export const housingAssignment = pgTable(
+  'housing_assignment',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    engagementId: uuid('engagement_id')
+      .notNull()
+      .references(() => engagement.id, { onDelete: 'cascade' }),
+    // Restrict: a room with people in it can't be deleted out from under them.
+    roomId: uuid('room_id')
+      .notNull()
+      .references(() => housingRoom.id, { onDelete: 'restrict' }),
+    startsOn: date('starts_on', { mode: 'string' }).notNull(),
+    endsOn: date('ends_on', { mode: 'string' }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('housing_assignment_room_id_idx').on(t.roomId, t.startsOn),
+    index('housing_assignment_engagement_id_idx').on(t.engagementId),
+    check('housing_assignment_dates_in_order', sql`${t.startsOn} < ${t.endsOn}`),
+  ],
+)
+
+export const housingPreference = pgTable(
+  'housing_preference',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    personId: uuid('person_id')
+      .notNull()
+      .references(() => person.id, { onDelete: 'cascade' }),
+    rule: housingRule('rule').notNull(),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [unique('housing_preference_person_rule_uq').on(t.personId, t.rule)],
+)
+
+/**
+ * The simulated flight feed's clock, one row. Moving it lets a demo replay a
+ * travel day ("it's 9 AM on Jan 10") without waiting for one. Only the
+ * simulated feed reads it.
+ */
+export const demoClock = pgTable(
+  'demo_clock',
+  {
+    id: boolean('id').primaryKey().default(true),
+    offsetMs: bigint('offset_ms', { mode: 'number' }).notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [check('demo_clock_single_row', sql`${t.id}`)],
 )

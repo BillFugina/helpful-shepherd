@@ -8,10 +8,12 @@ import type { AppRouter } from '../server/routers/index.js'
 import { TRPCProvider } from './lib/trpc'
 import { AccessPage } from './pages/AccessPage'
 import { AgentsPage } from './pages/AgentsPage'
+import { ArrivalsPage } from './pages/ArrivalsPage'
 import { AuditPage } from './pages/AuditPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
 import { HomePage } from './pages/HomePage'
+import { HousingPage } from './pages/HousingPage'
 import { ImportPage } from './pages/ImportPage'
 import { Layout } from './pages/Layout'
 import { PeoplePage } from './pages/PeoplePage'
@@ -20,6 +22,7 @@ import { SeasonPage } from './pages/SeasonPage'
 import { SeasonsPage } from './pages/SeasonsPage'
 import { SetupTwoFactorPage } from './pages/SetupTwoFactorPage'
 import { SignInPage } from './pages/SignInPage'
+import { TravelPage } from './pages/TravelPage'
 import { RequireStaff } from './pages/RequireStaff'
 import './styles.css'
 
@@ -38,6 +41,9 @@ const router = createBrowserRouter([
           { path: '/productions/:productionId/add', element: <FastEntryPage /> },
           { path: '/productions/:productionId/import', element: <ImportPage /> },
           { path: '/engagements/:engagementId', element: <EngagementPage /> },
+          { path: '/engagements/:engagementId/travel', element: <TravelPage /> },
+          { path: '/arrivals', element: <ArrivalsPage /> },
+          { path: '/housing', element: <HousingPage /> },
           { path: '/people', element: <PeoplePage /> },
           { path: '/people/:personId', element: <PersonPage /> },
           { path: '/agents', element: <AgentsPage /> },
