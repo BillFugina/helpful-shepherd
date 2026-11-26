@@ -10,6 +10,8 @@ import {
   type PDFForm,
   type PDFPage,
 } from 'pdf-lib'
+import { getDocument, PasswordException, VerbosityLevel, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import * as pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs'
 import {
   FORM_FIELDS,
   FORM_SIGNATURES,
@@ -20,10 +22,19 @@ import {
 } from '../../shared/contracts.js'
 
 /**
- * PDFs for contracts, with pdf-lib: reading a blank union form, filling its
- * named fields, and rendering a text template. Nothing here touches the
- * database.
+ * PDFs for contracts: reading a blank union form, filling its named fields,
+ * and rendering a text template. Nothing here touches the database.
+ *
+ * pdf-lib does the work, except for forms their publisher has locked
+ * (encrypted, as Equity's ITC contract is). pdf-lib can't write those, so
+ * PDF.js fills them and saves the result with the same lock, the way a PDF
+ * reader would.
  */
+
+// PDF.js runs its parser in the same process on the server. Handing it the
+// worker module here (rather than letting it load one by path) keeps the file
+// in the deployed bundle.
+;(globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = pdfjsWorker
 
 export class FormError extends Error {}
 
@@ -41,23 +52,55 @@ export function printable(value: string): string {
     .replace(/[^\n\r\t\x20-\x7e\u00a1-\u00ff]/g, '?')
 }
 
-async function load(bytes: Uint8Array): Promise<PDFDocument> {
+/** pdf-lib's document, or null when the publisher locked the file. */
+async function load(bytes: Uint8Array): Promise<PDFDocument | null> {
+  // A locked file names its lock in the trailer. Checking first spares pdf-lib
+  // a full parse that would only log a warning for every encrypted object.
+  if (Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).includes('/Encrypt')) return null
   try {
     return await PDFDocument.load(bytes, { updateMetadata: false })
-  } catch {
-    // pdf-lib's EncryptedPDFError doesn't survive instanceof, so ask the file.
-    const locked = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }).then(
-      (d) => d.isEncrypted,
-      () => false,
-    )
-    if (locked) {
-      throw new FormError(
-        'This PDF is locked by its publisher (encrypted), and the app can’t fill locked forms yet. Equity’s ITC contract is one of these.',
-      )
-    }
+  } catch (error) {
+    // pdf-lib's EncryptedPDFError doesn't survive instanceof, so go by its message.
+    if (error instanceof Error && /is encrypted/i.test(error.message)) return null
     throw new FormError("That file isn't a PDF the app can read.")
   }
 }
+
+/** A locked form, opened with PDF.js. Its fields are listed by name, one entry per widget. */
+interface LockedForm {
+  doc: PDFDocumentProxy
+  fields: Map<string, LockedWidget[]>
+  close: () => Promise<void>
+}
+
+interface LockedWidget {
+  id?: string
+  type?: string
+  /** A radio button's or checkbox's "on" value. */
+  exportValues?: string
+  buttonValue?: string
+  charLimit?: number
+  items?: { exportValue: string; displayValue: string }[]
+}
+
+async function openLocked(bytes: Uint8Array): Promise<LockedForm> {
+  // PDF.js takes ownership of the buffer it's given, so it gets a copy.
+  const task = getDocument({ data: bytes.slice(), verbosity: VerbosityLevel.ERRORS })
+  let doc: PDFDocumentProxy
+  try {
+    doc = await task.promise
+  } catch (error) {
+    await task.destroy()
+    if (error instanceof PasswordException) {
+      throw new FormError('This PDF needs a password to open. Upload the union’s blank form as they publish it.')
+    }
+    throw new FormError("That file isn't a PDF the app can read.")
+  }
+  const fields = ((await doc.getFieldObjects()) ?? new Map()) as Map<string, LockedWidget[]>
+  return { doc, fields, close: () => task.destroy() }
+}
+
+const onValue = (w: LockedWidget) => w.exportValues ?? w.buttonValue
 
 export interface FormInfo {
   format: FormFormat
@@ -65,13 +108,46 @@ export interface FormInfo {
   fields: number
 }
 
-function fieldKind(form: PDFForm, name: string): 'text' | 'choice' | 'checkbox' | 'other' | null {
-  const field = form.getFieldMaybe(name)
-  if (!field) return null
-  if (field instanceof PDFTextField) return 'text'
-  if (field instanceof PDFRadioGroup || field instanceof PDFDropdown) return 'choice'
-  if (field instanceof PDFCheckBox) return 'checkbox'
-  return 'other'
+/** What the app needs to know about a form field, whichever library read it. */
+interface FieldShape {
+  kind: 'text' | 'choice' | 'checkbox' | 'other'
+  options: string[]
+}
+
+function pdfLibShapes(form: PDFForm): Map<string, FieldShape> {
+  const out = new Map<string, FieldShape>()
+  for (const field of form.getFields()) {
+    const shape: FieldShape =
+      field instanceof PDFTextField
+        ? { kind: 'text', options: [] }
+        : field instanceof PDFRadioGroup || field instanceof PDFDropdown
+          ? { kind: 'choice', options: field.getOptions() }
+          : field instanceof PDFCheckBox
+            ? { kind: 'checkbox', options: [] }
+            : { kind: 'other', options: [] }
+    out.set(field.getName(), shape)
+  }
+  return out
+}
+
+function lockedShapes(fields: Map<string, LockedWidget[]>): Map<string, FieldShape> {
+  const out = new Map<string, FieldShape>()
+  for (const [name, widgets] of fields) {
+    const typed = widgets.filter((w) => w.type)
+    const type = typed[0]?.type
+    const shape: FieldShape =
+      type === 'text'
+        ? { kind: 'text', options: [] }
+        : type === 'radiobutton'
+          ? { kind: 'choice', options: typed.map(onValue).filter((v): v is string => Boolean(v)) }
+          : type === 'combobox' || type === 'listbox'
+            ? { kind: 'choice', options: (typed[0]?.items ?? []).map((i) => i.exportValue) }
+            : type === 'checkbox'
+              ? { kind: 'checkbox', options: [] }
+              : { kind: 'other', options: [] }
+    out.set(name, shape)
+  }
+  return out
 }
 
 /**
@@ -80,16 +156,28 @@ function fieldKind(form: PDFForm, name: string): 'text' | 'choice' | 'checkbox' 
  * that renames a field is caught here, at upload, not when a contract goes out.
  */
 export async function inspectForm(bytes: Uint8Array): Promise<FormInfo> {
+  let shapes: Map<string, FieldShape>
+  let pages: number
   const doc = await load(bytes)
-  const form = doc.getForm()
-  const names = new Set(form.getFields().map((f) => f.getName()))
-  if (!names.size) {
+  if (doc) {
+    shapes = pdfLibShapes(doc.getForm())
+    pages = doc.getPageCount()
+  } else {
+    const locked = await openLocked(bytes)
+    try {
+      shapes = lockedShapes(locked.fields)
+      pages = locked.doc.numPages
+    } finally {
+      await locked.close()
+    }
+  }
+  if (!shapes.size) {
     throw new FormError(
       'This PDF has no fillable fields. Upload the union’s fillable form, or paste the text as a text template.',
     )
   }
   const format = (Object.keys(FORM_SIGNATURES) as FormFormat[]).find((f) =>
-    FORM_SIGNATURES[f].every((n) => names.has(n)),
+    FORM_SIGNATURES[f].every((n) => shapes.has(n)),
   )
   if (!format) {
     throw new FormError(
@@ -98,13 +186,11 @@ export async function inspectForm(bytes: Uint8Array): Promise<FormInfo> {
   }
   const problems: string[] = []
   for (const f of FORM_FIELDS[format]) {
-    const kind = fieldKind(form, f.name)
-    if (kind === null) problems.push(`${f.name} is missing`)
-    else if (kind !== f.kind) problems.push(`${f.name} is a ${kind} field, not ${f.kind}`)
+    const shape = shapes.get(f.name)
+    if (!shape) problems.push(`${f.name} is missing`)
+    else if (shape.kind !== f.kind) problems.push(`${f.name} is a ${shape.kind} field, not ${f.kind}`)
     else if (f.kind === 'choice' && f.options) {
-      const field = form.getField(f.name) as PDFRadioGroup | PDFDropdown
-      const have = field.getOptions()
-      const missing = f.options.filter((o) => !have.includes(o))
+      const missing = f.options.filter((o) => !shape.options.includes(o))
       if (missing.length) problems.push(`${f.name} has no choice ${missing.join(', ')}`)
     }
   }
@@ -113,7 +199,7 @@ export async function inspectForm(bytes: Uint8Array): Promise<FormInfo> {
       `This looks like the ${TEMPLATE_FORMAT_LABELS[format]}, but a different edition: ${problems.join('; ')}.`,
     )
   }
-  return { format, pages: doc.getPageCount(), fields: names.size }
+  return { format, pages, fields: shapes.size }
 }
 
 /**
@@ -122,6 +208,7 @@ export async function inspectForm(bytes: Uint8Array): Promise<FormInfo> {
  */
 export async function fillForm(bytes: Uint8Array, fields: readonly ResolvedField[]): Promise<Uint8Array> {
   const doc = await load(bytes)
+  if (!doc) return fillLockedForm(bytes, fields)
   const form = doc.getForm()
   const font = await doc.embedFont(StandardFonts.Helvetica)
   for (const f of fields) {
@@ -144,6 +231,33 @@ export async function fillForm(bytes: Uint8Array, fields: readonly ResolvedField
   }
   form.updateFieldAppearances(font)
   return doc.save()
+}
+
+/** A locked form, filled with PDF.js and saved with its lock in place. Exported for tests: it fills an unlocked form the same way. */
+export async function fillLockedForm(bytes: Uint8Array, fields: readonly ResolvedField[]): Promise<Uint8Array> {
+  const { doc, fields: widgets, close } = await openLocked(bytes)
+  try {
+    for (const f of fields) {
+      const list = widgets.get(f.name)?.filter((w) => w.id && w.type)
+      if (!list?.length) throw new FormError(`The form has no field named ${f.name}.`)
+      const value = printable(f.value)
+      for (const w of list) {
+        if (w.type === 'text') {
+          const max = w.charLimit || undefined
+          doc.annotationStorage.setValue(w.id!, { value: max && value.length > max ? value.slice(0, max) : value })
+        } else if (w.type === 'radiobutton') {
+          doc.annotationStorage.setValue(w.id!, { value: Boolean(value) && onValue(w) === value })
+        } else if (w.type === 'checkbox') {
+          doc.annotationStorage.setValue(w.id!, { value: Boolean(value) })
+        } else if (w.type === 'combobox' || w.type === 'listbox') {
+          doc.annotationStorage.setValue(w.id!, { value })
+        }
+      }
+    }
+    return await doc.saveDocument()
+  } finally {
+    await close()
+  }
 }
 
 // ---------------------------------------------------------------------------

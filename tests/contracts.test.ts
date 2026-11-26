@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, notInArray } from 'drizzle-orm'
 import { PDFDocument } from 'pdf-lib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { inspectForm, fillForm, makeStandInForm, renderText } from '../server/contracts/pdf.js'
+import { fillForm, fillLockedForm, inspectForm, makeStandInForm, renderText } from '../server/contracts/pdf.js'
 import { createDb, type Db } from '../server/db/client.js'
 import {
   agent,
@@ -114,6 +114,23 @@ describe('contract fill rules', () => {
     const form = (await PDFDocument.load(filled)).getForm()
     expect(form.getTextField('Artist').getText()).toBe('Sam Sample')
     expect(form.getTextField('production').getText()).toBe('A Play')
+  })
+
+  it('fills a form the way it fills a locked one (Equity’s), with PDF.js', async () => {
+    // Equity's real form is locked and can't be committed here, so the stand-in goes through the same path.
+    const blank = await makeStandInForm('equity_itc_form')
+    const values = resolveContract(
+      { format: 'equity_itc_form', body: null },
+      { ...CONTEXT, person: { ...CONTEXT.person, homeStreet: '9 Sample Rd', homeCityStateZip: 'New York, NY 10025' } },
+      {},
+    )
+    const filled = await fillLockedForm(blank, values)
+    expect((await inspectForm(filled)).format).toBe('equity_itc_form')
+    const form = (await PDFDocument.load(filled)).getForm()
+    expect(form.getTextField('Employee').getText()).toBe('Sam Sample')
+    expect(form.getTextField('EmployeeAddress').getText()).toBe('9 Sample Rd')
+    expect(form.getTextField('CompensationShort').getText()).toBe('1,050.00')
+    expect(form.getRadioGroup('Duty').getSelected()).toBe('Principal')
   })
 
   it('refuses a PDF that isn’t one of the union forms', async () => {
