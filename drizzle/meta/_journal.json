@@ -43,6 +43,13 @@
       "when": 1795698679367,
       "tag": "0005_stay_no_overlap",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795706714875,
+      "tag": "0006_connector",
+      "breakpoints": true
     }
   ]
 }

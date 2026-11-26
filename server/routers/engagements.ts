@@ -14,6 +14,7 @@ import {
 import type { Db } from '../db/client.js'
 import { agent, conflict, engagement, person, production, season } from '../db/schema.js'
 import { toPersonRecord } from '../registry/person.js'
+import { decideDraft } from '../connector/drafts.js'
 import { addConflict, createAgent, createEngagement, createPerson, requireProduction } from '../roster/create.js'
 import { agentRecord, conflictRecord, engagementRecord } from '../roster/records.js'
 import { router, staffProcedure } from '../trpc.js'
@@ -107,6 +108,15 @@ export const engagementsRouter = router({
           { productionId: input.productionId, personId, agentId, terms: input.terms, conflicts: input.conflicts },
           'fast_entry',
         )
+        // Saved from a connector draft: close the draft in the same transaction.
+        if (input.draftId) {
+          await decideDraft(tx, ctx.user, input.draftId, {
+            status: 'accepted',
+            engagementId: id,
+            personId,
+            productionId: input.productionId,
+          })
+        }
         return { id, personId }
       }),
     )

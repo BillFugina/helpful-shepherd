@@ -1,7 +1,7 @@
 import { useForm } from '@tanstack/react-form'
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { z } from 'zod'
 import { authClient } from '../lib/auth-client'
 
@@ -10,14 +10,29 @@ const credentials = z.object({
   password: z.string().min(1, 'Enter your password'),
 })
 
-/** Email and password, then the second factor when the account has one. */
+/** True when sign-in answered with where an app's connect request goes next. */
+const continuesOAuth = (data: unknown) => {
+  const d = data as { redirect?: boolean; url?: string } | null
+  return Boolean(d?.redirect && d.url)
+}
+
+/**
+ * Email and password, then the second factor when the account has one. When
+ * an app like Claude sent the person here to connect, the page keeps the
+ * signed request in its URL and the auth client carries on to the Connect
+ * page after the second factor.
+ */
 export function SignInPage() {
   const [step, setStep] = useState<'password' | 'second-factor'>('password')
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [params] = useSearchParams()
+  const connecting = Boolean(params.get('client_id') && params.get('sig'))
 
-  async function finish() {
+  async function finish(data?: unknown) {
+    // The auth client is already sending them on to the Connect page.
+    if (continuesOAuth(data)) return
     await queryClient.invalidateQueries()
     await navigate('/')
   }
@@ -41,7 +56,7 @@ export function SignInPage() {
         return
       }
       // No second factor yet: home sends them to set it up.
-      await finish()
+      await finish(result.data)
     },
   })
 
@@ -50,6 +65,7 @@ export function SignInPage() {
   return (
     <section>
       <h1>Sign in</h1>
+      {connecting ? <p>Sign in to connect an app to your Theatre Raleigh account.</p> : null}
       <form
         className="card"
         onSubmit={(e) => {
@@ -92,7 +108,7 @@ export function SignInPage() {
   )
 }
 
-function SecondFactor({ onDone }: { onDone: () => Promise<void> }) {
+function SecondFactor({ onDone }: { onDone: (data?: unknown) => Promise<void> }) {
   const [useBackup, setUseBackup] = useState(false)
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -110,7 +126,7 @@ function SecondFactor({ onDone }: { onDone: () => Promise<void> }) {
       setError(result.error.status === 429 ? 'Too many attempts. Wait a minute.' : 'That code didn’t work.')
       return
     }
-    await onDone()
+    await onDone(result.data)
   }
 
   return (
