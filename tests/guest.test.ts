@@ -3,8 +3,9 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encryptField, fieldKey } from '../server/crypto/fields.js'
 import { createDb, type Db } from '../server/db/client.js'
-import { auditEvent, person, rateLimit, session } from '../server/db/schema.js'
+import { auditEvent, organization, person, rateLimit, session } from '../server/db/schema.js'
 import { ensureGuestUser, guestDemoClosed } from '../server/demo/guest.js'
+import { DEMO_ORGANIZATION } from '../server/demo/organization.js'
 import { replayFlight } from '../server/flights/replay.js'
 import { simulateStatus } from '../server/flights/provider.js'
 import { resetEnvForTests } from '../server/env.js'
@@ -106,6 +107,12 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
   const db = url ? createDb(url) : noDb
   const origin = 'http://localhost:5173'
   let personId = ''
+  let savedOrganization: (typeof organization.$inferSelect)[] = []
+  const useOrganization = (values: typeof DEMO_ORGANIZATION) =>
+    db
+      .insert(organization)
+      .values({ id: 1, ...values })
+      .onConflictDoUpdate({ target: organization.id, set: values })
 
   function post(path: string, body: unknown, cookie = '') {
     return handleAuth(
@@ -129,6 +136,9 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
     await db.delete(rateLimit)
     await ensureDefaultGrants(db)
     await ensureGuestUser(db)
+    // Other test files save their own theatre details; the demo needs the demo's.
+    savedOrganization = await db.select().from(organization)
+    await useOrganization(DEMO_ORGANIZATION)
     const key = fieldKey()
     const [p] = await db
       .insert(person)
@@ -147,6 +157,8 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
     await db.delete(person).where(eq(person.id, personId))
     await db.delete(session).where(eq(session.userId, GUEST_USER_ID))
     await db.delete(rateLimit)
+    await db.delete(organization)
+    if (savedOrganization.length) await db.insert(organization).values(savedOrganization)
   })
 
   it('the guest reads people without two-factor, with the sensitive groups gone', async () => {
@@ -219,6 +231,19 @@ describe.skipIf(!url)('guest demo against Postgres', () => {
     }
     expect(await guestDemoClosed(db)).toBeNull()
     expect(await createCaller({ db, user: guest }).people.list()).not.toHaveLength(0)
+  })
+
+  it('real theatre details close the demo too', async () => {
+    await useOrganization({ ...DEMO_ORGANIZATION, ein: '12-3456789' })
+    try {
+      expect(await guestDemoClosed(db)).toBe('real_data')
+      await expect(createCaller({ db, user: guest }).contracts.organization.get()).rejects.toMatchObject({
+        message: 'DEMO_CLOSED',
+      })
+    } finally {
+      await useOrganization(DEMO_ORGANIZATION)
+    }
+    expect(await guestDemoClosed(db)).toBeNull()
   })
 
   it('DEMO_GUEST=off closes open guest sessions too', async () => {

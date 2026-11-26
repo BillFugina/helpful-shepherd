@@ -11,6 +11,7 @@ import {
   engagement,
   engagementDraft,
   housingUnit,
+  organization,
   person,
   production,
   season,
@@ -18,6 +19,7 @@ import {
   user,
 } from '../db/schema.js'
 import { env } from '../env.js'
+import { DEMO_ORGANIZATION } from './organization.js'
 
 /** The sign-in path, under /api/auth. */
 export const GUEST_SIGN_IN_PATH = '/demo/guest'
@@ -41,6 +43,37 @@ export const GUEST_AUTH_PATHS: ReadonlySet<string> = new Set([
 /** Past this many live guest sessions, new visitors are asked to come back later. Keeps a free tier safe. */
 export const MAX_GUEST_SESSIONS = 1000
 
+// The demo theatre details, column for column, for the check below.
+const o = DEMO_ORGANIZATION
+const organizationColumns = sql.join(
+  [
+    organization.name,
+    organization.street,
+    organization.cityStateZip,
+    organization.phone,
+    organization.email,
+    organization.signerName,
+    organization.ein,
+    organization.unemploymentNumber,
+    organization.equityEmployerAgreement,
+  ],
+  sql`, `,
+)
+const demoValues = sql.join(
+  [
+    o.name,
+    o.street,
+    o.cityStateZip,
+    o.phone,
+    o.email,
+    o.signerName,
+    o.ein,
+    o.unemploymentNumber,
+    o.equityEmployerAgreement,
+  ].map((v) => sql`${v}::text`),
+  sql`, `,
+)
+
 /**
  * Why the guest demo is closed right now, or null when it's open.
  *
@@ -48,7 +81,8 @@ export const MAX_GUEST_SESSIONS = 1000
  * - real_data: the database holds a record that isn't fake demo data. Guests
  *   read with the same queries staff use, so the demo only runs on a database
  *   of demo records. Any record without the is_demo flag closes it, and so
- *   does any connector draft, because a draft keeps a pasted email.
+ *   does any connector draft, because a draft keeps a pasted email, and any
+ *   theatre details other than the demo's (they hold the employer's EIN).
  *
  * Checked when a guest signs in and again on every guest request, so turning
  * the demo off, or adding real data, takes effect at once for every open
@@ -66,6 +100,7 @@ export async function guestDemoClosed(db: Db): Promise<'off' | 'real_data' | nul
     or exists (select 1 from ${contractTemplate} where ${contractTemplate.isDemo} = false)
     or exists (select 1 from ${contract} where ${contract.isDemo} = false)
     or exists (select 1 from ${engagementDraft})
+    or exists (select 1 from ${organization} where row(${organizationColumns}) is distinct from row(${demoValues}))
   ) as real`)) as unknown as { rows: { real: boolean }[] }
   return result.rows[0]?.real ? 'real_data' : null
 }

@@ -7,6 +7,7 @@ import { makeStandInForm } from './contracts/pdf.js'
 import { loadOrganization, valuesToFreeze } from './contracts/service.js'
 import { airportTz, THEATRE_AIRPORT, THEATRE_TZ, zonedToUtc } from '../shared/time.js'
 import { encryptOptional } from './crypto/fields.js'
+import { DEMO_ORGANIZATION } from './demo/organization.js'
 import type { Db } from './db/client.js'
 import {
   account,
@@ -30,6 +31,8 @@ import {
   userRole,
 } from './db/schema.js'
 import { PERSON_STORAGE } from './registry/person.js'
+
+export { DEMO_ORGANIZATION }
 
 /**
  * Gives each role the plan's default grants, but only a role that has none
@@ -202,18 +205,6 @@ const DEMO_CITIES: Record<string, string> = {
 const NO_ADDRESS = 18
 
 /** The theatre's details on the demo's contracts. Every number is fake. */
-export const DEMO_ORGANIZATION = {
-  name: 'Theatre Raleigh (demo)',
-  street: '100 Example Street',
-  cityStateZip: 'Raleigh, NC 27601',
-  phone: '919-555-0100',
-  email: 'company.manager@example.com',
-  signerName: 'Pat Example',
-  ein: '00-0000000',
-  unemploymentNumber: 'DEMO-000000',
-  equityEmployerAgreement: 'DEMO-ITC-0000',
-}
-
 const DEMO_VENUE = {
   venueName: 'Main Stage (demo)',
   venueCapacity: 280,
