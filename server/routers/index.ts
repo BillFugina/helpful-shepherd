@@ -3,11 +3,14 @@ import { checkHealth } from '../health.js'
 import { publicProcedure, router } from '../trpc.js'
 import { accessRouter } from './access.js'
 import { agentsRouter } from './agents.js'
+import { arrivalsRouter } from './arrivals.js'
 import { auditRouter } from './audit.js'
 import { engagementsRouter } from './engagements.js'
+import { housingRouter } from './housing.js'
 import { importRouter } from './import.js'
 import { peopleRouter } from './people.js'
 import { productionsRouter, seasonsRouter } from './seasons.js'
+import { travelRouter } from './travel.js'
 
 export const appRouter = router({
   health: publicProcedure.query(checkHealth),
@@ -23,6 +26,9 @@ export const appRouter = router({
   productions: productionsRouter,
   agents: agentsRouter,
   engagements: engagementsRouter,
+  travel: travelRouter,
+  housing: housingRouter,
+  arrivals: arrivalsRouter,
   import: importRouter,
   access: accessRouter,
   audit: auditRouter,

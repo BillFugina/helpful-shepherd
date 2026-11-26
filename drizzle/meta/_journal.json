@@ -29,6 +29,20 @@
       "when": 1795631838454,
       "tag": "0003_roster",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795658568708,
+      "tag": "0004_arrivals",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795698679367,
+      "tag": "0005_stay_no_overlap",
+      "breakpoints": true
     }
   ]
 }

@@ -101,6 +101,12 @@ function pgCause(error: unknown): PgError | null {
 
 const CONSTRAINT_MESSAGES: Record<string, string> = {
   engagement_person_production_uq: 'This person is already on that production.',
+  housing_room_unit_name_uq: 'That place already has a room with this name.',
+  housing_preference_person_rule_uq: 'This person already has that housing rule.',
+  housing_assignment_room_id_housing_room_id_fk: 'Someone is assigned to this room. Move them first.',
+  housing_assignment_room_no_overlap: 'Someone else has that room for some of those nights.',
+  housing_assignment_engagement_no_overlap: 'This person already has a room for some of those nights.',
+  flight_departs_before_arriving: 'The flight has to land after it takes off. Check both times and time zones.',
 }
 
 /**
@@ -122,10 +128,16 @@ export function asUserError(error: unknown): unknown {
         message: known ?? 'Those dates or amounts are out of order or out of range.',
         cause: error,
       })
+    case '23P01':
+      return new TRPCError({
+        code: 'CONFLICT',
+        message: known ?? 'That overlaps something already booked.',
+        cause: error,
+      })
     case '23503':
       return new TRPCError({
         code: 'BAD_REQUEST',
-        message: 'That refers to a record that no longer exists, or one that other records still use.',
+        message: known ?? 'That refers to a record that no longer exists, or one that other records still use.',
         cause: error,
       })
     default:

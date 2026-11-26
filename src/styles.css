@@ -345,3 +345,139 @@ legend {
 .import-skip td {
   color: var(--muted);
 }
+
+/* Arrivals board, travel and housing */
+.tone-neutral {
+  background: var(--chip);
+}
+.tone-good {
+  background: var(--stage-done);
+}
+.tone-warn {
+  background: var(--stage-early);
+}
+.tone-bad {
+  background: var(--error);
+  color: #fff;
+}
+.board-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.board-card {
+  border-left-width: 6px;
+}
+.board-card p {
+  margin: 6px 0;
+}
+.tone-edge-good {
+  border-left-color: #3f9a5a;
+}
+.tone-edge-warn {
+  border-left-color: #d29a1f;
+}
+.tone-edge-bad {
+  border-left-color: var(--error);
+}
+.tone-edge-neutral {
+  border-left-color: var(--border);
+}
+.board-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.who {
+  display: flex;
+  flex-direction: column;
+}
+.who-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+.board-time {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+}
+.board-time strong {
+  font-size: 1.3rem;
+}
+.board-time .changed {
+  color: var(--accent);
+}
+.board-flight {
+  font-variant-numeric: tabular-nums;
+}
+.board .actions a.button,
+.board .actions button {
+  min-height: 40px;
+}
+.alerts li {
+  padding: 4px 0;
+}
+.alert-bad {
+  color: var(--error);
+}
+.demo-clock {
+  background: var(--banner);
+}
+.leg {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.leg-form {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.warning {
+  color: var(--accent);
+}
+.warning::before {
+  content: '⚠ ';
+}
+.calendar table {
+  border-collapse: collapse;
+}
+.calendar th.night,
+.calendar td.night {
+  min-width: 28px;
+  padding: 4px 2px;
+  text-align: center;
+  border-left: 1px solid var(--border);
+}
+.calendar th.room {
+  min-width: 160px;
+  text-align: left;
+  font-weight: 500;
+  position: sticky;
+  left: 0;
+  background: var(--card);
+}
+.calendar td.stay {
+  background: var(--stage-mid);
+  border-left: 2px solid var(--card);
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 1px;
+}
+.calendar td.stay.warned {
+  background: var(--stage-early);
+}
+.room-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.room-form input[type='number'] {
+  width: 64px;
+}

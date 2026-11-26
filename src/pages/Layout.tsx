@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
-import { ADMIN_ROLE, ROLE_LABELS } from '../../shared/access'
+import { ADMIN_ROLE, levelAtLeast, levelFor, ROLE_LABELS } from '../../shared/access'
 import { authClient } from '../lib/auth-client'
 import { useMe } from '../lib/useMe'
 
@@ -9,6 +9,8 @@ export function Layout() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const staff = me.data?.twoFactorEnabled && me.data.role
+  const sees = (group: 'travel_logistics' | 'housing_access') =>
+    levelAtLeast(levelFor(me.data?.grants ?? {}, group), 'view')
 
   async function signOut() {
     await authClient.signOut()
@@ -28,6 +30,8 @@ export function Layout() {
               <NavLink to="/seasons">Seasons</NavLink>
               <NavLink to="/people">People</NavLink>
               <NavLink to="/agents">Agents</NavLink>
+              {sees('travel_logistics') ? <NavLink to="/arrivals">Arrivals</NavLink> : null}
+              {sees('housing_access') ? <NavLink to="/housing">Housing</NavLink> : null}
               {me.data?.role === ADMIN_ROLE ? (
                 <>
                   <NavLink to="/admin/access">Access</NavLink>

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hashPassword } from 'better-auth/crypto'
 import { eq, inArray, or } from 'drizzle-orm'
 import { DEFAULT_GRANTS, ROLES, type Role } from '../shared/access.js'
+import { airportTz, THEATRE_AIRPORT, THEATRE_TZ, zonedToUtc } from '../shared/time.js'
 import { encryptOptional } from './crypto/fields.js'
 import type { Db } from './db/client.js'
 import {
@@ -9,8 +10,14 @@ import {
   agent,
   conflict,
   engagement,
+  flight,
+  housingAssignment,
+  housingPreference,
+  housingRoom,
+  housingUnit,
   person,
   production,
+  rentalCar,
   roleGrant,
   season,
   user,
@@ -170,6 +177,90 @@ function addDays(date: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+/**
+ * Made-up flights home to the theater. The airline codes are real so the
+ * board reads naturally, but the numbers are invented and the feed is
+ * simulated. The last digit picks what the feed does (see flights/provider.ts).
+ */
+const DEMO_ROUTES: Record<string, { airline: string; minutes: number }> = {
+  LGA: { airline: 'DL', minutes: 105 },
+  JFK: { airline: 'B6', minutes: 110 },
+  ORD: { airline: 'AA', minutes: 125 },
+  BOS: { airline: 'B6', minutes: 130 },
+  LAX: { airline: 'AA', minutes: 290 },
+  ATL: { airline: 'DL', minutes: 85 },
+  EWR: { airline: 'UA', minutes: 105 },
+  DCA: { airline: 'AA', minutes: 70 },
+  MIA: { airline: 'AA', minutes: 125 },
+  SEA: { airline: 'AS', minutes: 330 },
+  PHL: { airline: 'AA', minutes: 85 },
+  CLT: { airline: 'AA', minutes: 55 },
+  IAD: { airline: 'UA', minutes: 70 },
+  MSP: { airline: 'DL', minutes: 160 },
+  DEN: { airline: 'UA', minutes: 220 },
+  BNA: { airline: 'WN', minutes: 95 },
+  SFO: { airline: 'UA', minutes: 315 },
+  PIT: { airline: 'WN', minutes: 85 },
+}
+/** Departure times at the home airport (arriving) and at RDU (going home), by slot. */
+const ARRIVE_DEPARTS = ['07:10', '09:25', '11:40', '13:15', '16:05'] as const
+const HOME_DEPARTS = ['10:20', '12:45', '08:30', '15:10', '17:35'] as const
+/**
+ * Last digit of each arriving flight, by production and slot. The first
+ * production's arrival day (Jan 10, 2027) has a 45-minute delay, a gate
+ * change and an early landing; the second has a cancellation.
+ */
+const ARRIVAL_DIGITS = [
+  [7, 8, 3, 1, 2],
+  [5, 4, 0, 9, 6],
+  [2, 3, 7, 0, 8],
+  [1, 6, 4, 5, 0],
+  [0, 2, 8, 6, 3],
+] as const
+const RETURN_DIGITS = [2, 5, 6, 8, 0] as const
+
+/** Places to stay, all invented. Rooms sharing a bathroom label share that bathroom. */
+const DEMO_HOUSING = [
+  {
+    name: 'Company house (demo)',
+    kind: 'company_house' as const,
+    address: '100 Example Lane, Raleigh, NC',
+    accessNotes: 'Lockbox by the side door. Park on the street (demo).',
+    doorCode: '0000',
+    rooms: [
+      { name: 'Room 1', floor: 1, bathroom: 'Downstairs bath' },
+      { name: 'Room 2', floor: 1, bathroom: 'Downstairs bath' },
+      { name: 'Room 3', floor: 2, bathroom: 'Upstairs bath' },
+      { name: 'Room 4', floor: 2, bathroom: 'Upstairs bath' },
+    ],
+  },
+  {
+    name: 'Glenwood apartment (demo)',
+    kind: 'apartment' as const,
+    address: '200 Sample Street, Apt 3B, Raleigh, NC',
+    accessNotes: 'Key fob at the theater front desk (demo).',
+    doorCode: null,
+    rooms: [{ name: 'Bedroom', floor: 3, bathroom: 'Private bath' }],
+  },
+  {
+    name: 'Oakwood guesthouse (demo, donated)',
+    kind: 'guesthouse' as const,
+    address: '300 Placeholder Road, Raleigh, NC',
+    accessNotes: 'Host lives in the main house. Text before arriving late (demo).',
+    doorCode: '1111',
+    rooms: [
+      { name: 'Front bedroom', floor: 1, bathroom: 'Guest bath' },
+      { name: 'Back bedroom', floor: 1, bathroom: 'Guest bath' },
+    ],
+  },
+] as const
+
+/** Housing rules, by person index. Set so the second production shows warnings. */
+const DEMO_PREFERENCES = [
+  { at: 4, rule: 'private_bathroom' as const, note: 'Asked for her own bathroom (demo).' },
+  { at: 8, rule: 'ground_floor' as const, note: 'Prefers no stairs (demo).' },
+]
+
 export interface DemoCounts {
   people: number
   agents: number
@@ -177,6 +268,11 @@ export interface DemoCounts {
   productions: number
   engagements: number
   conflicts: number
+  flights: number
+  cars: number
+  housingUnits: number
+  rooms: number
+  stays: number
 }
 
 /**
@@ -189,6 +285,14 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
   return db.transaction(async (tx) => {
     const demoPeople = tx.select({ id: person.id }).from(person).where(eq(person.isDemo, true))
     const demoProductions = tx.select({ id: production.id }).from(production).where(eq(production.isDemo, true))
+    const demoRooms = tx
+      .select({ id: housingRoom.id })
+      .from(housingRoom)
+      .innerJoin(housingUnit, eq(housingUnit.id, housingRoom.unitId))
+      .where(eq(housingUnit.isDemo, true))
+    // Flights, cars and stays go with their engagements; stays in demo rooms go first.
+    await tx.delete(housingAssignment).where(inArray(housingAssignment.roomId, demoRooms))
+    await tx.delete(housingUnit).where(eq(housingUnit.isDemo, true))
     await tx
       .delete(engagement)
       .where(
@@ -295,6 +399,87 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
     ]
     await tx.insert(conflict).values(conflictRows.map(({ at, ...c }) => ({ ...c, engagementId: engagements[at]!.id })))
 
+    // Travel, cars and housing for everyone the theater brings in.
+    const units = await tx
+      .insert(housingUnit)
+      .values(DEMO_HOUSING.map(({ rooms: _rooms, ...u }) => ({ ...u, isDemo: true })))
+      .returning({ id: housingUnit.id })
+    const rooms = await tx
+      .insert(housingRoom)
+      .values(DEMO_HOUSING.flatMap((u, i) => u.rooms.map((r) => ({ ...r, unitId: units[i]!.id }))))
+      .returning({ id: housingRoom.id })
+
+    const flightRows: (typeof flight.$inferInsert)[] = []
+    const carRows: (typeof rentalCar.$inferInsert)[] = []
+    const stayRows: (typeof housingAssignment.$inferInsert)[] = []
+    engagementRows.forEach((row, n) => {
+      if (!row.travelProvided) return
+      const k = Math.floor(n / SLOTS.length)
+      const j = n % SLOTS.length
+      const home = DEMO_PEOPLE[(k * 4 + j) % DEMO_PEOPLE.length]!.homeAirport
+      const route = DEMO_ROUTES[home]!
+      const engagementId = engagements[n]!.id
+      const base = 2000 + n * 110
+      const tag = String(n + 1).padStart(2, '0')
+
+      const outLeaves = zonedToUtc(`${row.preferredArrival}T${ARRIVE_DEPARTS[j]}`, airportTz(home))
+      const outLands = new Date(outLeaves.getTime() + route.minutes * 60_000)
+      flightRows.push({
+        engagementId,
+        direction: 'arrival',
+        airline: route.airline,
+        flightNumber: String(base + ARRIVAL_DIGITS[k]![j]!),
+        fromAirport: home,
+        toAirport: THEATRE_AIRPORT,
+        scheduledDeparture: outLeaves,
+        scheduledArrival: outLands,
+        confirmation: `DEMO${tag}A`,
+        bookingSource: 'Booked by the theater (demo)',
+      })
+      const backLeaves = zonedToUtc(`${row.preferredDeparture}T${HOME_DEPARTS[j]}`, THEATRE_TZ)
+      const backLands = new Date(backLeaves.getTime() + route.minutes * 60_000)
+      flightRows.push({
+        engagementId,
+        direction: 'departure',
+        airline: route.airline,
+        flightNumber: String(base + 50 + RETURN_DIGITS[j]!),
+        fromAirport: THEATRE_AIRPORT,
+        toAirport: home,
+        scheduledDeparture: backLeaves,
+        scheduledArrival: backLands,
+        confirmation: `DEMO${tag}A`,
+        bookingSource: 'Booked by the theater (demo)',
+      })
+      if (row.carProvided) {
+        carRows.push({
+          engagementId,
+          company: 'Example Car Rental (demo)',
+          confirmation: `DEMO-CAR-${tag}`,
+          pickupAt: new Date(outLands.getTime() + 30 * 60_000),
+          pickupPlace: 'RDU rental car center',
+          returnAt: new Date(backLeaves.getTime() - 2 * 3_600_000),
+          returnPlace: 'RDU rental car center',
+        })
+      }
+      // Productions don't overlap, so each one fills the rooms from the top.
+      const roomIndex = engagementRows.slice(k * SLOTS.length, n).filter((r) => r.housingProvided).length
+      if (row.housingProvided && rooms[roomIndex]) {
+        stayRows.push({
+          engagementId,
+          roomId: rooms[roomIndex].id,
+          startsOn: row.preferredArrival!,
+          // One stay ends a night early, to show the flies-home-after-housing warning.
+          endsOn: k === 2 && j === 2 ? addDays(row.preferredDeparture!, -1) : row.preferredDeparture!,
+        })
+      }
+    })
+    await tx.insert(flight).values(flightRows)
+    if (carRows.length) await tx.insert(rentalCar).values(carRows)
+    if (stayRows.length) await tx.insert(housingAssignment).values(stayRows)
+    await tx
+      .insert(housingPreference)
+      .values(DEMO_PREFERENCES.map(({ at, ...p }) => ({ ...p, personId: people[at]!.id })))
+
     return {
       people: people.length,
       agents: agents.length,
@@ -302,6 +487,11 @@ export async function reseedDemo(db: Db, key?: Buffer): Promise<DemoCounts> {
       productions: productions.length,
       engagements: engagements.length,
       conflicts: conflictRows.length,
+      flights: flightRows.length,
+      cars: carRows.length,
+      housingUnits: units.length,
+      rooms: rooms.length,
+      stays: stayRows.length,
     }
   })
 }

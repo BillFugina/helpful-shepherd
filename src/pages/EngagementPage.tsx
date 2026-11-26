@@ -41,6 +41,11 @@ export function EngagementPage() {
           .join(' · ')}
       </p>
 
+      {can('travel_logistics') || can('housing_access') ? (
+        <p>
+          <Link to={`/engagements/${engagementId}/travel`}>Travel and housing</Link>
+        </p>
+      ) : null}
       {can('general', 'edit') ? <EditTerms detail={d} /> : <ReadTerms detail={d} />}
       <Conflicts detail={d} />
       {can('general', 'edit') && can('contact', 'edit') && can('pay_terms', 'edit') ? (
