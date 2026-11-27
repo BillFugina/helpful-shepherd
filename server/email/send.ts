@@ -10,11 +10,22 @@ export type DeliveryMode = 'log' | 'allowlist' | 'live'
  */
 export type Delivery = 'sent' | 'logged' | 'held'
 
+export interface EmailAttachment {
+  filename: string
+  /** The file, base64. */
+  content: string
+}
+
 export interface OutgoingEmail {
   to: string
+  /** Copies. Each is checked on its own; one that isn't allowed is left off, not sent. */
+  cc?: readonly string[]
   subject: string
   text: string
   replyTo?: string | null
+  attachments?: readonly EmailAttachment[]
+  /** Resend sends one email per key, so a retry after a lost reply can't send it twice. */
+  idempotencyKey?: string
 }
 
 export interface DeliveryResult {
@@ -79,16 +90,30 @@ export async function sendEmail(
   const e = deps.env ?? env()
   const decision = deliveryDecision(msg.to, opts, e)
   if (decision) return decision
+  const to = msg.to.trim().toLowerCase()
+  // Copies go only to addresses allowed on their own, never to the main address again.
+  const cc = [...new Set((msg.cc ?? []).map((a) => a.trim().toLowerCase()))].filter(
+    (a) => a && a !== to && !deliveryDecision(a, opts, e),
+  )
   const body: Record<string, unknown> = {
     from: e.EMAIL_FROM,
     to: [msg.to.trim()],
     subject: oneLine(msg.subject),
     text: msg.text,
   }
+  if (cc.length) body.cc = cc
   if (msg.replyTo && !isReservedAddress(msg.replyTo)) body.reply_to = msg.replyTo
+  if (msg.attachments?.length) {
+    body.attachments = msg.attachments.map((a) => ({ filename: oneLine(a.filename), content: a.content }))
+  }
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${e.RESEND_API_KEY}`,
+    'Content-Type': 'application/json',
+  }
+  if (msg.idempotencyKey) headers['Idempotency-Key'] = msg.idempotencyKey
   const res = await (deps.fetch ?? fetch)('https://api.resend.com/emails', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${e.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
   if (!res.ok) {

@@ -125,6 +125,7 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
   const [sentTo, setSentTo] = useState('')
   const [sentOn, setSentOn] = useState(today())
   const [signedOn, setSignedOn] = useState(today())
+  const [copyAgent, setCopyAgent] = useState(true)
 
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: trpc.contracts.get.queryKey({ id: c.id }) })
@@ -136,9 +137,18 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
   const save = useMutation(trpc.contracts.setOverrides.mutationOptions({ onSuccess: refresh }))
   const download = useMutation(trpc.contracts.download.mutationOptions())
   const markSent = useMutation(trpc.contracts.markSent.mutationOptions({ onSuccess: refresh }))
+  const emailIt = useMutation(
+    trpc.contracts.email.mutationOptions({
+      onSuccess: async (r) => {
+        if (r.outcome === 'sent') await refresh()
+      },
+    }),
+  )
   const markSigned = useMutation(trpc.contracts.markSigned.mutationOptions({ onSuccess: refresh }))
   const voidIt = useMutation(trpc.contracts.void.mutationOptions({ onSuccess: refresh }))
-  const error = save.error ?? download.error ?? markSent.error ?? markSigned.error ?? voidIt.error
+  const error = save.error ?? download.error ?? emailIt.error ?? markSent.error ?? markSigned.error ?? voidIt.error
+  const who = d.recipients
+  const agentCanCopy = Boolean(who?.agent?.email)
 
   const dirty = JSON.stringify(overrides) !== JSON.stringify(c.overrides ?? {})
   const setOverride = (name: string, value: string | null) =>
@@ -211,6 +221,85 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
           : 'The PDF holds the person’s home address and pay. Every download is logged.'}
       </p>
 
+      {emailIt.data && emailIt.data.outcome === 'sent' ? (
+        <p className="ok">
+          Emailed{emailIt.data.agent?.outcome === 'sent' ? ' to them and their agent' : ''} and marked sent.
+          {emailIt.data.agent?.outcome === 'left_off'
+            ? ` Their agent’s copy was left off: ${emailIt.data.agent.reason}`
+            : ''}
+        </p>
+      ) : null}
+
+      {editable && who ? (
+        <section className="card wide">
+          <h2>Email it</h2>
+          <p className="muted small">
+            Sends the filled PDF from the app, with replies coming back to you, and marks it sent. This moves{' '}
+            {displayName(d.person)} to {PIPELINE_LABELS.contract_sent}.
+          </p>
+          <p>
+            To: {who.person.name}{' '}
+            {who.person.email ? (
+              <span className="muted">({who.person.email})</span>
+            ) : (
+              <span className="error">has no email address on file</span>
+            )}
+          </p>
+          {who.agent ? (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={agentCanCopy && copyAgent}
+                disabled={!agentCanCopy}
+                onChange={(e) => setCopyAgent(e.target.checked)}
+              />{' '}
+              Copy their agent, {who.agent.name}
+              {who.agent.agency ? `, ${who.agent.agency}` : ''}{' '}
+              <span className="muted">{who.agent.email ? `(${who.agent.email})` : '(no email address on file)'}</span>
+            </label>
+          ) : (
+            <p className="muted small">No agent on this deal.</p>
+          )}
+          {d.emailMode !== 'live' ? (
+            <p className="muted small">
+              {d.emailMode === 'log'
+                ? 'Email is turned off here, so nothing will be sent. You’ll get the email to send yourself.'
+                : 'Email is in test mode here: only addresses on the test list get it.'}
+            </p>
+          ) : null}
+          <div className="actions">
+            <button
+              type="button"
+              disabled={emailIt.isPending || dirty || d.blanks.length > 0 || !who.person.email}
+              title={dirty ? 'Save your changes first' : undefined}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Email this contract to ${who.person.name}${agentCanCopy && copyAgent ? ' and their agent' : ''}?`,
+                  )
+                )
+                  emailIt.mutate({ id: c.id, copyAgent: agentCanCopy && copyAgent })
+              }}
+            >
+              {emailIt.isPending ? 'Sending…' : 'Email contract'}
+            </button>
+          </div>
+          {emailIt.data && emailIt.data.outcome !== 'sent' ? (
+            <div>
+              <p className="error">
+                Not sent: {emailIt.data.reason ?? 'the email didn’t go out.'} It’s still a draft. Download the PDF and
+                send it yourself, then mark it sent below.
+              </p>
+              {emailIt.data.email ? (
+                <pre className="email-preview">
+                  {`To: ${emailIt.data.email.to}${emailIt.data.email.cc.length ? `\nCc: ${emailIt.data.email.cc.join(', ')}` : ''}\nSubject: ${emailIt.data.email.subject}\n\n${emailIt.data.email.text}`}
+                </pre>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       {editable ? (
         <form
           className="card wide"
@@ -221,8 +310,8 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
         >
           <h2>Mark sent</h2>
           <p className="muted small">
-            Send the PDF yourself, then record it here. The app doesn’t email contracts yet. This moves{' '}
-            {displayName(d.person)} to {PIPELINE_LABELS.contract_sent}.
+            Sent it some other way? Record it here. This moves {displayName(d.person)} to{' '}
+            {PIPELINE_LABELS.contract_sent} too.
           </p>
           <div className="grid">
             <label>
@@ -240,7 +329,7 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
             </label>
           </div>
           <div className="actions">
-            <button type="submit" disabled={markSent.isPending || dirty || d.blanks.length > 0}>
+            <button type="submit" className="secondary" disabled={markSent.isPending || dirty || d.blanks.length > 0}>
               {markSent.isPending ? 'Saving…' : 'Mark sent'}
             </button>
           </div>

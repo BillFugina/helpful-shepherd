@@ -6,6 +6,7 @@ import {
   blankFields,
   CONTRACT_FIELDS,
   contactFieldNames,
+  emailContractInput,
   FORM_CONTRACT_TYPE,
   markSentInput,
   markSignedInput,
@@ -35,7 +36,9 @@ import {
   valuesToFreeze,
 } from '../contracts/service.js'
 import type { Db } from '../db/client.js'
-import { contract, contractTemplate, engagement, organization, person, production } from '../db/schema.js'
+import { agent, contract, contractTemplate, engagement, organization, person, production } from '../db/schema.js'
+import { contractEmail, contractEmailKey, sentToWords } from '../contracts/email.js'
+import { deliveryDecision, deliveryMode, sendEmail, type Delivery } from '../email/send.js'
 import { router, staffProcedure, type SessionUser } from '../trpc.js'
 import { auditChange, friendly, requireEdit, requireView } from '../writes.js'
 import { contractSent } from '../reminders/announce.js'
@@ -343,6 +346,99 @@ function safeFileName(...parts: string[]): string {
     .slice(0, 150)}.pdf`
 }
 
+type Resolved = Awaited<ReturnType<typeof resolvedFields>>
+
+/**
+ * The filled PDF carries the person's home address, email and pay, so making
+ * one needs Personal ID and Contact (each only when the form uses it) on top
+ * of Contracts and Pay terms. Returns the groups it touched, for the log.
+ */
+function pdfGroups(grants: Grants, fields: Resolved['fields']): FieldGroup[] {
+  const personal = fields.some((f) => f.personal && f.value)
+  if (personal) requireView(grants, 'personal_id')
+  const contact = fields.some((f) => f.contact && f.value)
+  if (contact) requireView(grants, 'contact')
+  return [
+    'contracts',
+    'pay_terms',
+    ...(personal ? (['personal_id'] as const) : []),
+    ...(contact ? (['contact'] as const) : []),
+  ]
+}
+
+async function contractPdf(row: { template: TemplateRow }, fields: Resolved['fields']): Promise<Uint8Array> {
+  try {
+    if (row.template.format === 'text') {
+      const values = Object.fromEntries(fields.map((f) => [f.name, f.value]))
+      return await renderText(row.template.name, mergeBody(row.template.body ?? '', values))
+    }
+    return await fillForm(row.template.pdf!, fields)
+  } catch (error) {
+    if (error instanceof FormError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message })
+    throw error
+  }
+}
+
+/** Who a contract on this engagement would be emailed to: the person, and their agent if any. */
+async function contractRecipients(db: Db, engagementId: string) {
+  const [row] = await db
+    .select({
+      isDemo: engagement.isDemo,
+      legalName: person.legalName,
+      preferredName: person.preferredName,
+      email: person.email,
+      personIsDemo: person.isDemo,
+      agentName: agent.name,
+      agentAgency: agent.agency,
+      agentEmail: agent.email,
+      agentIsDemo: agent.isDemo,
+    })
+    .from(engagement)
+    .innerJoin(person, eq(person.id, engagement.personId))
+    .leftJoin(agent, eq(agent.id, engagement.agentId))
+    .where(eq(engagement.id, engagementId))
+    .limit(1)
+  if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'That engagement no longer exists.' })
+  return {
+    person: {
+      name: row.preferredName?.trim() || row.legalName,
+      firstName: row.preferredName?.trim() || row.legalName.trim().split(/\s+/)[0] || '',
+      email: row.email?.trim() || null,
+      isDemo: row.isDemo || row.personIsDemo,
+    },
+    agent:
+      row.agentName === null
+        ? null
+        : {
+            name: row.agentName,
+            agency: row.agentAgency,
+            email: row.agentEmail?.trim() || null,
+            isDemo: row.isDemo || Boolean(row.agentIsDemo),
+          },
+  }
+}
+
+type EmailOutcome = Delivery
+
+interface EmailResult {
+  id: string
+  outcome: EmailOutcome
+  /** Why it (or the agent's copy) didn't go, in words. */
+  reason?: string
+  /** The agent's copy, when one was asked for. */
+  agent?: { outcome: 'sent' | 'left_off'; reason?: string }
+  movedTo: 'contract_sent' | null
+  /** The email, when nothing went out, so the Company Manager can send it herself. */
+  email?: { to: string; cc: string[]; subject: string; text: string }
+}
+
+/** Thrown inside the transaction to undo the writes when the email didn't go after all. */
+class NotSent extends Error {
+  constructor(readonly result: { delivery: Delivery; reason?: string }) {
+    super('not sent')
+  }
+}
+
 export const contractsRouter = router({
   organization: organizationRouter,
   templates: templatesRouter,
@@ -439,6 +535,15 @@ export const contractsRouter = router({
       production: { id: context.production.id, title: context.production.title, seasonId: context.production.seasonId },
       fields: forDisplay(fields, { seesContact: sees(ctx.grants, 'contact') }),
       blanks: blankFields(fields).map((f) => f.label),
+      // Who Email it would go to. Names and addresses are Contact fields.
+      recipients:
+        row.contract.status === 'draft' && sees(ctx.grants, 'contact')
+          ? await contractRecipients(ctx.db, row.contract.engagementId).then((r) => ({
+              person: { name: r.person.name, email: r.person.email },
+              agent: r.agent ? { name: r.agent.name, agency: r.agent.agency, email: r.agent.email } : null,
+            }))
+          : null,
+      emailMode: deliveryMode(),
     }
   }),
 
@@ -497,28 +602,8 @@ export const contractsRouter = router({
     requireContractView(ctx.grants)
     const row = await contractOrThrow(ctx.db, input.id)
     const { fields, context } = await resolvedFields(ctx.db, row)
-    const personal = fields.some((f) => f.personal && f.value)
-    if (personal) requireView(ctx.grants, 'personal_id')
-    const contact = fields.some((f) => f.contact && f.value)
-    if (contact) requireView(ctx.grants, 'contact')
-    let bytes: Uint8Array
-    try {
-      if (row.template.format === 'text') {
-        const values = Object.fromEntries(fields.map((f) => [f.name, f.value]))
-        bytes = await renderText(row.template.name, mergeBody(row.template.body ?? '', values))
-      } else {
-        bytes = await fillForm(row.template.pdf!, fields)
-      }
-    } catch (error) {
-      if (error instanceof FormError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message })
-      throw error
-    }
-    const groups: FieldGroup[] = [
-      'contracts',
-      'pay_terms',
-      ...(personal ? (['personal_id'] as const) : []),
-      ...(contact ? (['contact'] as const) : []),
-    ]
+    const groups = pdfGroups(ctx.grants, fields)
+    const bytes = await contractPdf(row, fields)
     for (const fieldGroup of groups) {
       await recordAudit(ctx.db, {
         actorId: ctx.user.id,
@@ -538,7 +623,149 @@ export const contractsRouter = router({
   }),
 
   /**
-   * Records that the contract went out (the app doesn't email it). Refused
+   * Emails the filled PDF to the person, copying their agent, and marks it
+   * sent, all or nothing: the contract is marked sent only once the email
+   * service takes it, and a failed send leaves it a draft. Refused while a
+   * required field is blank. When email is off here, or the address isn't
+   * allowed, nothing is written and the email comes back to send by hand.
+   */
+  email: staffProcedure.input(emailContractInput).mutation(async ({ ctx, input }) => {
+    requireEdit(ctx.grants, ['contracts', 'general'])
+    requireContractView(ctx.grants)
+    // The addresses are Contact fields.
+    requireView(ctx.grants, 'contact')
+    const sentOn = theatreToday()
+    let result: EmailResult
+    try {
+      result = await friendly(() =>
+        ctx.db.transaction(async (tx) => {
+          const row = await contractOrThrow(tx, input.id, { lock: true })
+          if (row.contract.status !== 'draft') {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'This contract was already sent or voided.' })
+          }
+          const { fields, context } = await resolvedFields(tx, {
+            ...row,
+            contract: { ...row.contract, sentOn },
+          })
+          const blanks = blankFields(fields)
+          if (blanks.length) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `Fill these before it goes out: ${blanks.map((f) => f.label).join(', ')}.`,
+            })
+          }
+          const groups = pdfGroups(ctx.grants, fields)
+          const who = await contractRecipients(tx, row.contract.engagementId)
+          const to = who.person.email
+          if (!to) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `There’s no email address for ${who.person.name}. Add one on their profile first.`,
+            })
+          }
+          const wantAgent = input.copyAgent && who.agent !== null
+          if (wantAgent && !who.agent!.email) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `There’s no email address for their agent, ${who.agent!.name}. Add one, or send it without the copy.`,
+            })
+          }
+          const agentEmail = wantAgent ? who.agent!.email : null
+          const theatre = (await loadOrganization(tx)).name ?? ''
+          const message = contractEmail({
+            firstName: who.person.firstName,
+            theatre,
+            productionTitle: context.production.title,
+            templateName: row.template.name,
+            agentName: agentEmail ? who.agent!.name : null,
+            senderName: ctx.user.name,
+          })
+          const handBack = (r: { delivery: Delivery; reason?: string }): EmailResult => ({
+            id: input.id,
+            outcome: r.delivery,
+            ...(r.reason ? { reason: r.reason } : {}),
+            movedTo: null,
+            email: { to, cc: agentEmail ? [agentEmail] : [], ...message },
+          })
+          // The person has to be able to get it, or nothing goes and nothing changes.
+          const refused = deliveryDecision(to, { isDemo: who.person.isDemo })
+          if (refused) return handBack(refused)
+          const agentRefused = agentEmail ? deliveryDecision(agentEmail, { isDemo: who.agent!.isDemo }) : null
+          const cc = agentEmail && !agentRefused ? [agentEmail] : []
+
+          const bytes = await contractPdf(row, fields)
+          const fileName = safeFileName(context.production.title, context.person.legalName, row.template.name)
+
+          // Writes first, the email last: if the email fails, the writes roll back.
+          await tx
+            .update(contract)
+            .set({
+              status: 'sent',
+              sentOn,
+              sentAt: new Date(),
+              sentTo: sentToWords(who.person.name, cc.length ? who.agent : null),
+              sentValues: valuesToFreeze(fields),
+            })
+            .where(eq(contract.id, input.id))
+          for (const fieldGroup of groups) {
+            await recordAudit(tx, {
+              actorId: ctx.user.id,
+              actorEmail: ctx.user.email,
+              action: 'send',
+              recordType: 'contract',
+              recordId: input.id,
+              personId: context.person.id,
+              fieldGroup,
+              // Who it went to by kind, never the address.
+              detail: {
+                via: 'email',
+                to: cc.length ? ['person', 'agent'] : ['person'],
+                templateId: row.template.id,
+                ...(fieldGroup === 'contracts' ? { fields: ['status', 'sentOn', 'sentTo'] } : {}),
+              },
+            })
+          }
+          const moved = await advanceEngagement(tx, ctx.user, row.contract.engagementId, 'contract_sent')
+          const sent = await sendEmail(
+            {
+              to,
+              cc,
+              ...message,
+              replyTo: ctx.user.email,
+              attachments: [{ filename: fileName, content: Buffer.from(bytes).toString('base64') }],
+              idempotencyKey: contractEmailKey(input.id, [to, ...cc, message.subject, message.text, bytes]),
+            },
+            { isDemo: who.person.isDemo },
+          )
+          if (sent.delivery !== 'sent') throw new NotSent(sent)
+          return {
+            id: input.id,
+            outcome: 'sent' as const,
+            movedTo: moved ? ('contract_sent' as const) : null,
+            ...(agentEmail
+              ? {
+                  agent: agentRefused
+                    ? { outcome: 'left_off' as const, reason: agentRefused.reason }
+                    : { outcome: 'sent' as const },
+                }
+              : {}),
+          }
+        }),
+      )
+    } catch (error) {
+      if (error instanceof NotSent) {
+        // Rare: the address passed the check above but not the send. Nothing was written.
+        return { id: input.id, outcome: error.result.delivery, reason: error.result.reason, movedTo: null }
+      }
+      throw error
+    }
+    // Book the digest for the morning it would turn late, as Mark sent does.
+    if (result.outcome === 'sent') await contractSent(ctx.db, sentOn)
+    return result
+  }),
+
+  /**
+   * Records a contract sent some other way (by hand, from her own email). Refused
    * while a required field is blank. Moves the engagement to Contract sent.
    */
   markSent: staffProcedure.input(markSentInput).mutation(async ({ ctx, input }) => {

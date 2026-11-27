@@ -33,8 +33,15 @@ export async function paperworkChanged(productionIds: readonly string[]): Promis
 /** A contract went out: make sure there's a digest the morning it would turn late. */
 export async function contractSent(db: Db, sentOn: string, now = new Date()): Promise<void> {
   if (!inngestEnabled()) return
-  const { contractDaysAfter } = await loadReminderSettings(db)
-  const day = contractDigestDay(sentOn, contractDaysAfter, now)
+  let day: string | null
+  try {
+    // Best effort like the rest of this file: the contract has already gone out.
+    const { contractDaysAfter } = await loadReminderSettings(db)
+    day = contractDigestDay(sentOn, contractDaysAfter, now)
+  } catch (error) {
+    console.error('could not read reminder settings to book a contract digest', error)
+    return
+  }
   if (day) await send([digestWake(day)])
 }
 

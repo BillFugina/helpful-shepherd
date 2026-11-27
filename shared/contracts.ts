@@ -780,6 +780,9 @@ export const markSentInput = z.object({
   sentTo: trimmed(300),
 })
 
+/** Emails the filled PDF to the person, copying their agent when there is one and asked to. */
+export const emailContractInput = z.object({ id: z.uuid(), copyAgent: z.boolean() })
+
 export const markSignedInput = z.object({ id: z.uuid(), signedOn: isoDate })
 
 export const organizationInput = z.object({
