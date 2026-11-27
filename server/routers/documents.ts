@@ -45,7 +45,6 @@ import {
   hashLinkToken,
   loadChecklists,
   loadSettings,
-  newLinkToken,
   purgeExpired,
   purgeFile,
 } from '../documents/service.js'
@@ -56,8 +55,9 @@ import {
   REMINDER_RECORD,
   reminderEmail,
 } from '../documents/reminders.js'
+import { issueLink } from '../documents/links.js'
+import { formsNews } from '../reminders/announce.js'
 import { deliveryMode, sendEmail, type Delivery } from '../email/send.js'
-import { appOrigin } from '../env.js'
 import { adminProcedure, publicProcedure, router, staffProcedure, type SessionUser } from '../trpc.js'
 import { friendly, requireEdit, requireView } from '../writes.js'
 
@@ -237,43 +237,6 @@ async function openLink(db: Db, token: string, lock: boolean) {
   return { row, items }
 }
 
-/**
- * Makes an upload link for these forms. Only a hash of the token is stored;
- * the full address comes back once, to whoever asked for it.
- */
-async function issueLink(
-  db: Db,
-  user: SessionUser,
-  eng: { id: string; personId: string },
-  documentTypes: readonly DocumentType[],
-) {
-  const settings = await loadSettings(db)
-  const token = newLinkToken()
-  const expiresAt = new Date(Date.now() + settings.linkDays * 24 * 60 * 60 * 1000)
-  const types = DOCUMENT_TYPES.filter((t) => documentTypes.includes(t))
-  const [link] = await db
-    .insert(uploadLink)
-    .values({
-      engagementId: eng.id,
-      tokenHash: hashLinkToken(token),
-      documentTypes: types,
-      expiresAt,
-      createdBy: user.id,
-    })
-    .returning({ id: uploadLink.id })
-  await recordAudit(db, {
-    actorId: user.id,
-    actorEmail: user.email,
-    action: 'create',
-    recordType: 'upload_link',
-    recordId: link!.id,
-    personId: eng.personId,
-    fieldGroup: 'documents',
-    detail: { documentTypes: types, expiresAt: expiresAt.toISOString() },
-  })
-  return { id: link!.id, url: `${appOrigin()}/upload/${token}`, expiresAt }
-}
-
 function linkState(l: typeof uploadLink.$inferSelect, now = Date.now()) {
   if (l.revokedAt) return 'revoked' as const
   if (l.expiresAt.getTime() <= now) return 'expired' as const
@@ -381,7 +344,7 @@ export const uploadLinkRouter = router({
 
   send: publicProcedure.input(linkUploadInput).mutation(async ({ ctx, input }) => {
     const file = decodeFile(input.base64)
-    return friendly(() =>
+    const done = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const { row, items } = await openLink(tx, input.token, true)
         const item = items.find((i) => i.documentType === input.documentType)
@@ -411,6 +374,9 @@ export const uploadLinkRouter = router({
         return { ok: true }
       }),
     )
+    // It goes in the Company Manager's next morning digest.
+    await formsNews()
+    return done
   }),
 })
 
@@ -795,7 +761,7 @@ export const documentsRouter = router({
   flag: staffProcedure.input(flagInput).mutation(async ({ ctx, input }) => {
     requireReview(ctx.grants)
     const eng = await engagementOrThrow(ctx.db, input.engagementId)
-    return ctx.db.transaction(async (tx) => {
+    const done = await ctx.db.transaction(async (tx) => {
       const doc = await lockDocument(tx, eng, input.documentType)
       if (doc.status !== 'sent_to_finance') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: "That form hasn't been sent to Finance." })
@@ -807,6 +773,8 @@ export const documentsRouter = router({
       await auditStatus(tx, ctx.user, doc, eng.personId, { from: doc.status, to: 'received', flagged: true })
       return { ok: true }
     })
+    await formsNews()
+    return done
   }),
 
   /** This form doesn't apply this time. Deletes any file held for it. */

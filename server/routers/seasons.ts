@@ -17,6 +17,7 @@ import { agent, conflict, engagement, person, production, season } from '../db/s
 import { conflictRecord, engagementRecord, productionRecord, seasonRecord } from '../roster/records.js'
 import { router, staffProcedure } from '../trpc.js'
 import { auditChange, friendly, groupsOf, requireEdit, requireView, writtenKeys } from '../writes.js'
+import { paperworkChanged } from '../reminders/announce.js'
 
 async function seasonOrThrow(db: Db, id: string) {
   const [row] = await db.select().from(season).where(eq(season.id, id)).limit(1)
@@ -201,7 +202,7 @@ export const productionsRouter = router({
   create: staffProcedure.input(createProductionInput).mutation(async ({ ctx, input }) => {
     const keys = writtenKeys(input, PRODUCTION_FIELDS)
     requireEdit(ctx.grants, groupsOf(keys, PRODUCTION_FIELDS))
-    return friendly(() =>
+    const created = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         await seasonOrThrow(tx, input.seasonId)
         const [row] = await tx.insert(production).values(input).returning({ id: production.id })
@@ -216,6 +217,8 @@ export const productionsRouter = router({
         return { id: row!.id }
       }),
     )
+    if (input.rehearsalStart) await paperworkChanged([created.id])
+    return created
   }),
 
   update: staffProcedure.input(updateProductionInput).mutation(async ({ ctx, input }) => {
@@ -223,7 +226,7 @@ export const productionsRouter = router({
     const keys = writtenKeys(changes, PRODUCTION_FIELDS)
     requireEdit(ctx.grants, groupsOf(keys, PRODUCTION_FIELDS))
     if (!keys.length) return { id }
-    return friendly(() =>
+    const saved = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [updated] = await tx
           .update(production)
@@ -241,5 +244,8 @@ export const productionsRouter = router({
         return { id }
       }),
     )
+    // A new first-rehearsal date moves the paperwork reminder.
+    if ('rehearsalStart' in changes) await paperworkChanged([id])
+    return saved
   }),
 })

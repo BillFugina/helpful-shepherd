@@ -38,6 +38,7 @@ import type { Db } from '../db/client.js'
 import { contract, contractTemplate, engagement, organization, person, production } from '../db/schema.js'
 import { router, staffProcedure, type SessionUser } from '../trpc.js'
 import { auditChange, friendly, requireEdit, requireView } from '../writes.js'
+import { contractSent } from '../reminders/announce.js'
 
 /** Reading a contract shows its pay, so it needs Pay terms as well as Contracts. */
 function requireContractView(grants: Parameters<typeof requireView>[0]) {
@@ -542,7 +543,7 @@ export const contractsRouter = router({
    */
   markSent: staffProcedure.input(markSentInput).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['contracts', 'general'])
-    return friendly(() =>
+    const sent = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const row = await contractOrThrow(tx, input.id, { lock: true })
         if (row.contract.status !== 'draft') {
@@ -581,6 +582,9 @@ export const contractsRouter = router({
         return { id: input.id, movedTo: moved ? ('contract_sent' as const) : null }
       }),
     )
+    // Book the digest for the morning it would turn late. Signed by then, it isn't mentioned.
+    await contractSent(ctx.db, input.sentOn)
+    return sent
   }),
 
   /**

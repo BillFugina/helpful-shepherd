@@ -82,6 +82,7 @@ export function Layout() {
               {sees('housing') ? <NavLink to="/housing">Housing</NavLink> : null}
               {sees('contracts') ? <NavLink to="/contracts/settings">Contracts</NavLink> : null}
               {sees('documents') ? <NavLink to="/documents">Documents</NavLink> : null}
+              {sees('documents') ? <NavLink to="/settings/reminders">Reminders</NavLink> : null}
               {me.data?.role === ADMIN_ROLE ? (
                 <>
                   <NavLink to="/admin/access">Access</NavLink>

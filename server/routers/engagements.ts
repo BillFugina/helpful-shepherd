@@ -19,6 +19,7 @@ import { addConflict, createAgent, createEngagement, createPerson, requireProduc
 import { agentRecord, conflictRecord, engagementRecord } from '../roster/records.js'
 import { router, staffProcedure } from '../trpc.js'
 import { auditChange, friendly, groupsOf, requireEdit, requireView, writtenKeys } from '../writes.js'
+import { paperworkChanged } from '../reminders/announce.js'
 
 async function engagementOrThrow(db: Db, id: string) {
   const [row] = await db.select().from(engagement).where(eq(engagement.id, id)).limit(1)
@@ -79,7 +80,7 @@ export const engagementsRouter = router({
     if (input.agent.kind !== 'none') groups.add('contact')
     requireEdit(ctx.grants, [...groups])
 
-    return friendly(() =>
+    const saved = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         await requireProduction(tx, input.productionId)
         let personId: string
@@ -120,6 +121,9 @@ export const engagementsRouter = router({
         return { id, personId }
       }),
     )
+    // Someone added late still gets the paperwork reminder.
+    await paperworkChanged([input.productionId])
+    return saved
   }),
 
   update: staffProcedure.input(updateEngagementInput).mutation(async ({ ctx, input }) => {
