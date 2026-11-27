@@ -20,12 +20,17 @@ import { companyManagers, greeting, sees } from './recipients.js'
 /** The audit record type for a sent summary; one per production per day, which also stops repeats. */
 export const SUMMARY_RECORD = 'arrival_summary'
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
 export interface SummaryPerson {
   engagementId: string
   name: string
   role: string
-  /** The leg that lands in town. Null when they're expected but no flight is logged. */
-  flight: { airline: string; flightNumber: string; fromAirport: string; scheduledArrival: Date } | null
+  /**
+   * The leg that lands in town, with its live landing time when the tracker has
+   * one. Null when they're expected but no flight is logged.
+   */
+  flight: { airline: string; flightNumber: string; fromAirport: string; landsAt: Date; cancelled: boolean } | null
   car: { company: string; pickupAt: Date; pickupPlace: string | null } | null
   /** Place and room names only: never the address, door code or how to get in. */
   housing: { place: string; room: string } | null
@@ -52,14 +57,27 @@ export async function arrivalsOn(db: Db, date: string): Promise<ProductionSummar
       flightNumber: flight.flightNumber,
       fromAirport: flight.fromAirport,
       scheduledArrival: flight.scheduledArrival,
+      liveArrival: flight.liveArrival,
+      liveStatus: flight.liveStatus,
     })
     .from(flight)
-    .where(and(eq(flight.direction, 'arrival'), gte(flight.scheduledArrival, start), lt(flight.scheduledArrival, end)))
+    .where(
+      and(
+        eq(flight.direction, 'arrival'),
+        // A day either side, so a delay or early landing that moves a flight onto `date` is caught.
+        gte(flight.scheduledArrival, new Date(start.getTime() - DAY_MS)),
+        lt(flight.scheduledArrival, new Date(end.getTime() + DAY_MS)),
+      ),
+    )
+  // The day is judged by the live landing time when the tracker has one.
+  const landsAt = (l: (typeof legs)[number]) =>
+    l.liveStatus !== 'cancelled' && l.liveArrival ? l.liveArrival : l.scheduledArrival
+  const onDay = legs.filter((l) => landsAt(l) >= start && landsAt(l) < end)
   // A connection has two arriving legs; the one that lands last is the one into town.
   const lastLeg = new Map<string, (typeof legs)[number]>()
-  for (const l of legs) {
+  for (const l of onDay) {
     const prev = lastLeg.get(l.engagementId)
-    if (!prev || prev.scheduledArrival < l.scheduledArrival) lastLeg.set(l.engagementId, l)
+    if (!prev || landsAt(prev) < landsAt(l)) lastLeg.set(l.engagementId, l)
   }
 
   const expected = await db
@@ -123,7 +141,8 @@ export async function arrivalsOn(db: Db, date: string): Promise<ProductionSummar
             airline: leg.airline,
             flightNumber: leg.flightNumber,
             fromAirport: leg.fromAirport,
-            scheduledArrival: leg.scheduledArrival,
+            landsAt: landsAt(leg),
+            cancelled: leg.liveStatus === 'cancelled',
           }
         : null,
       car: car ? { company: car.company, pickupAt: car.pickupAt, pickupPlace: car.pickupPlace } : null,
@@ -138,7 +157,7 @@ export async function arrivalsOn(db: Db, date: string): Promise<ProductionSummar
     group.people.push(entry)
     byProduction.set(p.productionId, group)
   }
-  const landing = (s: SummaryPerson) => s.flight?.scheduledArrival.getTime() ?? Number.MAX_SAFE_INTEGER
+  const landing = (s: SummaryPerson) => s.flight?.landsAt.getTime() ?? Number.MAX_SAFE_INTEGER
   return [...byProduction.values()]
     .map((g) => ({ ...g, people: g.people.sort((a, b) => landing(a) - landing(b) || a.name.localeCompare(b.name)) }))
     .sort((a, b) => a.title.localeCompare(b.title))
@@ -156,9 +175,11 @@ export function arrivalSummaryEmail(input: {
   const time = (d: Date) => formatTime(d, THEATRE_TZ)
   const line = (p: SummaryPerson) => {
     const parts = [
-      p.flight
-        ? `${p.flight.airline} ${p.flight.flightNumber} from ${p.flight.fromAirport}, lands ${time(p.flight.scheduledArrival)}.`
-        : 'No flight logged yet.',
+      !p.flight
+        ? 'No flight logged yet.'
+        : p.flight.cancelled
+          ? `${p.flight.airline} ${p.flight.flightNumber} from ${p.flight.fromAirport} was cancelled. They need a new flight.`
+          : `${p.flight.airline} ${p.flight.flightNumber} from ${p.flight.fromAirport}, lands ${time(p.flight.landsAt)}.`,
     ]
     if (p.car) {
       parts.push(

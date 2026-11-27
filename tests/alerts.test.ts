@@ -94,7 +94,8 @@ describe('flight alerts and the scheduled job, without a database', () => {
             airline: 'B6',
             flightNumber: '1017',
             fromAirport: 'BOS',
-            scheduledArrival: new Date('2033-02-01T16:10:00Z'),
+            landsAt: new Date('2033-02-01T16:10:00Z'),
+            cancelled: false,
           },
           car: { company: 'Hertz', pickupAt: new Date('2033-02-01T16:40:00Z'), pickupPlace: 'RDU' },
           housing: { place: 'Company house', room: 'Room 2' },
@@ -107,6 +108,17 @@ describe('flight alerts and the scheduled job, without a database', () => {
     expect(withHousing.text).toContain('B6 1017 from BOS, lands 11:10 AM.')
     expect(withHousing.text).toContain('Car: Hertz, pickup 11:40 AM at RDU.')
     expect(withHousing.text).toContain('Staying: Company house, Room 2.')
+    const cancelled = arrivalSummaryEmail({
+      recipientName: 'Sam',
+      summary: {
+        ...summary,
+        people: [{ ...summary.people[0]!, flight: { ...summary.people[0]!.flight!, cancelled: true } }],
+      },
+      showHousing: true,
+      boardUrl: 'u',
+    })
+    expect(cancelled.text).toContain('B6 1017 from BOS was cancelled. They need a new flight.')
+    expect(cancelled.text).not.toContain('lands 11:10 AM')
     const without = arrivalSummaryEmail({ recipientName: 'Sam', summary, showHousing: false, boardUrl: 'u' })
     expect(without.text).not.toContain('Company house')
   })
@@ -332,7 +344,8 @@ describe.skipIf(!url)('flight alerts and summaries against Postgres', () => {
     await sendArrivalSummaries(db, { date: '2033-02-01', origin: 'https://app.test', send })
     const email = mine().find((m) => m.subject.includes(productionTitle))!
     expect(email.subject).toBe(`Arriving tomorrow for ${productionTitle}: 2 people`)
-    expect(email.text).toContain('B6 1017 from BOS, lands 11:10 AM.')
+    // The tracker logged a 45-minute delay earlier, so the summary uses the live landing time.
+    expect(email.text).toContain('B6 1017 from BOS, lands 11:55 AM.')
     expect(email.text).toContain('Car: Hertz, pickup 11:40 AM at RDU rental lot.')
     expect(email.text).toContain(`Staying: Company house ${tag}, Room 2.`)
     expect(email.text).toContain(`Driver ${tag} (Lead): No flight logged yet.`)
