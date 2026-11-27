@@ -5,9 +5,11 @@ import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router'
 import superjson from 'superjson'
 import type { AppRouter } from '../server/routers/index.js'
+import { registerServiceWorker } from './lib/push'
 import { TRPCProvider } from './lib/trpc'
 import { AccessPage } from './pages/AccessPage'
 import { AgentsPage } from './pages/AgentsPage'
+import { AlertsPage } from './pages/AlertsPage'
 import { ArrivalsPage } from './pages/ArrivalsPage'
 import { AuditPage } from './pages/AuditPage'
 import { ConnectionsPage } from './pages/ConnectionsPage'
@@ -69,6 +71,7 @@ const router = createBrowserRouter([
           { path: '/agents', element: <AgentsPage /> },
           { path: '/drafts', element: <DraftsPage /> },
           { path: '/settings/connections', element: <ConnectionsPage /> },
+          { path: '/settings/alerts', element: <AlertsPage /> },
           { path: '/admin/access', element: <AccessPage /> },
           { path: '/admin/audit', element: <AuditPage /> },
         ],
@@ -94,6 +97,9 @@ function App() {
     </QueryClientProvider>
   )
 }
+
+// For phone alerts: the browser needs the service worker registered to wake it later.
+registerServiceWorker()
 
 const root = document.getElementById('root')
 if (!root) throw new Error('#root missing')

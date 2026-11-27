@@ -1,7 +1,7 @@
 import { and, eq, gte, isNull, lte, or, notInArray } from 'drizzle-orm'
 import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import { sendArrivalSummaries } from '../alerts/arrivals-summary.js'
-import { sendFlightAlerts } from '../alerts/flight-alerts.js'
+import { flightAlertNotice, sendFlightAlerts } from '../alerts/flight-alerts.js'
 import { companyManagers, greeting } from '../alerts/recipients.js'
 import { db } from '../db/client.js'
 import { flight } from '../db/schema.js'
@@ -22,6 +22,7 @@ import {
   watchFlight,
 } from '../flights/push.js'
 import { feedNow } from '../flights/track.js'
+import { pushToCompanyManagers, pushToUser } from '../push/send.js'
 import { inngest } from './client.js'
 
 // Nothing here polls. Booked flights are watched only from 3 hours before
@@ -202,9 +203,18 @@ export const applyFlightPushJob = inngest.createFunction(
     const result = await step.run('apply', () => applyPush(db(), subscriptionId, payload, new Date()))
 
     if (result.events) {
-      await step.run('email-alerts', () =>
+      const emailed = await step.run('email-alerts', () =>
         sendFlightAlerts(db(), { now: new Date(), origin: appOrigin(), simulated: false }),
       )
+      // Its own step, after the emails: a push that fails never resends an email.
+      // The alert is rebuilt from ids inside the step, so no names reach run history.
+      const { eventIds } = emailed
+      if (eventIds.length) {
+        await step.run('push-alerts', async () => {
+          const notice = await flightAlertNotice(db(), eventIds, false)
+          return notice ? pushToCompanyManagers(db(), notice) : null
+        })
+      }
     }
     for (const flightId of result.finished) {
       await step.run(`release-${flightId}`, () => releaseFlight(db(), api(), flightId))
@@ -226,6 +236,16 @@ export const applyFlightPushJob = inngest.createFunction(
         ].join('\n')
         return (await sendEmail({ to: to.email, subject: 'Flight test update', text }, { isDemo: false })).delivery
       })
+    }
+    if (result.testLines.length && result.startedBy) {
+      const startedBy = result.startedBy
+      await step.run('push-test', () =>
+        pushToUser(db(), startedBy, {
+          title: 'Flight test update',
+          body: result.testLines.join('\n'),
+          path: '/arrivals',
+        }),
+      )
     }
     if (result.testFinished) {
       await step.run('end-test', () => endSubscription(db(), api(), subscriptionId))
@@ -329,7 +349,7 @@ export const flightAlertsJob = inngest.createFunction(
     concurrency: 1,
   },
   async ({ step }) => {
-    return step.run('email-alerts', async () => {
+    const emailed = await step.run('email-alerts', async () => {
       const provider = flightProvider()
       return sendFlightAlerts(db(), {
         now: await feedNow(db(), provider),
@@ -337,6 +357,16 @@ export const flightAlertsJob = inngest.createFunction(
         simulated: provider === simulatedProvider,
       })
     })
+    // Its own step, after the emails: a push that fails never resends an email.
+    // The alert is rebuilt from ids inside the step, so no names reach run history.
+    const { eventIds, ...counts } = emailed
+    const pushed = eventIds.length
+      ? await step.run('push-alerts', async () => {
+          const notice = await flightAlertNotice(db(), eventIds, flightProvider() === simulatedProvider)
+          return notice ? pushToCompanyManagers(db(), notice) : null
+        })
+      : null
+    return { ...counts, pushed }
   },
 )
 

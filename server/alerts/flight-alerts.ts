@@ -5,6 +5,7 @@ import { recordAudit } from '../audit.js'
 import type { Db } from '../db/client.js'
 import { engagement, flight, flightEvent, person, production } from '../db/schema.js'
 import { sendEmail, type Delivery } from '../email/send.js'
+import type { PushNotice } from '../push/send.js'
 import { shortName } from '../travel/records.js'
 import { companyManagers, greeting } from './recipients.js'
 
@@ -97,6 +98,99 @@ export function flightAlertEmail(input: {
   return { subject, text }
 }
 
+/** Changes listed in a phone alert before it says how many more there are. */
+const PUSH_LINES = 4
+
+/** The phone alert for the same changes: the email's subject as the title, one line per change. */
+export function flightAlertPush(input: { items: readonly AlertItem[]; simulated: boolean }): PushNotice {
+  const { items } = input
+  const first = items[0]!
+  const title =
+    items.length === 1 ? `${first.name}'s ${SUBJECT[first.kind] ?? 'flight changed'}` : `${items.length} flight updates`
+  const lines = items.slice(0, PUSH_LINES).map(describeAlert)
+  if (items.length > PUSH_LINES) lines.push(`And ${items.length - PUSH_LINES} more on the Arrivals board.`)
+  if (input.simulated) lines.push('Simulated demo flights, not real ones.')
+  return { title, body: lines.join('\n'), path: '/arrivals' }
+}
+
+interface ClaimedEvent {
+  id: string
+  flightId: string
+  kind: FlightEventKind
+  at: Date
+  detail: Record<string, unknown> | null
+}
+
+/** Who and which flight for each change, in the order given. A change whose flight is gone is skipped. */
+async function alertItems(db: Db, events: readonly ClaimedEvent[]): Promise<AlertItem[]> {
+  if (!events.length) return []
+  const rows = await db
+    .select({
+      flight,
+      legalName: person.legalName,
+      preferredName: person.preferredName,
+      productionTitle: production.title,
+    })
+    .from(flight)
+    .innerJoin(engagement, eq(engagement.id, flight.engagementId))
+    .innerJoin(person, eq(person.id, engagement.personId))
+    .innerJoin(production, eq(production.id, engagement.productionId))
+    .where(inArray(flight.id, [...new Set(events.map((e) => e.flightId))]))
+  const byFlight = new Map(rows.map((r) => [r.flight.id, r]))
+  return events.flatMap((e) => {
+    const r = byFlight.get(e.flightId)
+    if (!r) return []
+    const f = r.flight
+    return [
+      {
+        kind: e.kind,
+        detail: e.detail ?? null,
+        name: shortName(r),
+        production: r.productionTitle,
+        airline: f.airline,
+        flightNumber: f.flightNumber,
+        direction: f.direction,
+        fromAirport: f.fromAirport,
+        toAirport: f.toAirport,
+        scheduledDeparture: f.scheduledDeparture,
+        scheduledArrival: f.scheduledArrival,
+        liveDeparture: f.liveDeparture,
+        liveArrival: f.liveArrival,
+      },
+    ]
+  })
+}
+
+/**
+ * The phone alert for changes an earlier step emailed, rebuilt from their ids
+ * so the alert's names and flights never sit in the job's run history. Null
+ * when none of them is left.
+ */
+export async function flightAlertNotice(
+  db: Db,
+  eventIds: readonly string[],
+  simulated: boolean,
+): Promise<PushNotice | null> {
+  if (!eventIds.length) return null
+  const rows = await db
+    .select({
+      id: flightEvent.id,
+      flightId: flightEvent.flightId,
+      kind: flightEvent.kind,
+      at: flightEvent.at,
+      detail: flightEvent.detail,
+    })
+    .from(flightEvent)
+    .where(inArray(flightEvent.id, [...eventIds]))
+  const order = new Map(eventIds.map((id, i) => [id, i]))
+  rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+  const items = await alertItems(
+    db,
+    rows.map((r) => ({ ...r, detail: r.detail ?? null })),
+  )
+  return items.length ? flightAlertPush({ items, simulated }) : null
+}
+
 type Send = typeof sendEmail
 
 export interface AlertRunResult {
@@ -104,6 +198,11 @@ export interface AlertRunResult {
   alerts: number
   /** What happened to each email, counted. */
   deliveries: Partial<Record<Delivery | 'failed', number>>
+  /**
+   * The changes emailed, by id, for the next step to push. Ids only: this is
+   * kept in the job's run history, so no names or flights go in it.
+   */
+  eventIds: string[]
 }
 
 /**
@@ -131,44 +230,10 @@ export async function sendFlightAlerts(
   const fresh = claimed
     .filter((e) => isAlertKind(e.kind) && e.at.getTime() >= opts.now.getTime() - ALERT_FRESH_MS)
     .sort((a, b) => a.at.getTime() - b.at.getTime())
-  if (!fresh.length) return { alerts: 0, deliveries: {} }
+  if (!fresh.length) return { alerts: 0, deliveries: {}, eventIds: [] }
 
-  const rows = await db
-    .select({
-      flight,
-      legalName: person.legalName,
-      preferredName: person.preferredName,
-      productionTitle: production.title,
-    })
-    .from(flight)
-    .innerJoin(engagement, eq(engagement.id, flight.engagementId))
-    .innerJoin(person, eq(person.id, engagement.personId))
-    .innerJoin(production, eq(production.id, engagement.productionId))
-    .where(inArray(flight.id, [...new Set(fresh.map((e) => e.flightId))]))
-  const byFlight = new Map(rows.map((r) => [r.flight.id, r]))
-  const items: AlertItem[] = fresh.flatMap((e) => {
-    const r = byFlight.get(e.flightId)
-    if (!r) return []
-    const f = r.flight
-    return [
-      {
-        kind: e.kind,
-        detail: e.detail ?? null,
-        name: shortName(r),
-        production: r.productionTitle,
-        airline: f.airline,
-        flightNumber: f.flightNumber,
-        direction: f.direction,
-        fromAirport: f.fromAirport,
-        toAirport: f.toAirport,
-        scheduledDeparture: f.scheduledDeparture,
-        scheduledArrival: f.scheduledArrival,
-        liveDeparture: f.liveDeparture,
-        liveArrival: f.liveArrival,
-      },
-    ]
-  })
-  if (!items.length) return { alerts: 0, deliveries: {} }
+  const items = await alertItems(db, fresh)
+  if (!items.length) return { alerts: 0, deliveries: {}, eventIds: [] }
 
   const recipients = await companyManagers(db, 'travel_logistics')
   const deliveries: AlertRunResult['deliveries'] = {}
@@ -212,5 +277,5 @@ export async function sendFlightAlerts(
     // Counts only: no names, flights or addresses.
     detail: { alerts: items.length, recipients: recipients.length, deliveries },
   })
-  return { alerts: items.length, deliveries }
+  return { alerts: items.length, deliveries, eventIds: fresh.map((e) => e.id) }
 }

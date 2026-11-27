@@ -33,6 +33,18 @@ const schema = z.object({
   // simulated (default): the demo feed. aerodatabox: booked flights are watched
   // by AeroDataBox from 3 hours before take-off until they land.
   FLIGHT_FEED: z.enum(['simulated', 'aerodatabox']).optional(),
+  // Phone alerts (Web Push). Both VAPID keys, from `npx web-push generate-vapid-keys`.
+  // Without them, phone alerts are off and the settings page says so.
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  // Who runs this server, for the push services: an https URL or mailto:.
+  // Defaults to the app's own address.
+  VAPID_SUBJECT: z.string().optional(),
+  // off (default): never send. allowlist: only to logins in PUSH_ALLOWLIST.
+  // live: to every Company Manager who turned alerts on. Demo logins never get one.
+  PUSH_DELIVERY: z.enum(['off', 'allowlist', 'live']).optional(),
+  // Comma-separated login emails that may get phone alerts in allowlist mode.
+  PUSH_ALLOWLIST: z.string().optional(),
   // Optional: defaults to the Vercel deployment URL, or localhost in dev.
   BETTER_AUTH_URL: z.url().optional(),
   VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),

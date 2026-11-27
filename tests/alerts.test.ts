@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { eq, inArray } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { arrivalSummaryEmail, arrivalsOn, sendArrivalSummaries } from '../server/alerts/arrivals-summary.js'
-import { describeAlert, flightAlertEmail, sendFlightAlerts, type AlertItem } from '../server/alerts/flight-alerts.js'
+import {
+  describeAlert,
+  flightAlertEmail,
+  flightAlertNotice,
+  sendFlightAlerts,
+  type AlertItem,
+} from '../server/alerts/flight-alerts.js'
 import { companyManagers } from '../server/alerts/recipients.js'
 import { createDb, type Db } from '../server/db/client.js'
 import {
@@ -315,6 +321,20 @@ describe.skipIf(!url)('flight alerts and summaries against Postgres', () => {
       .from(flightEvent)
       .where(inArray(flightEvent.id, [stale!.id, departed!.id]))
     expect(rows.every((r) => r.alertedAt !== null)).toBe(true)
+  })
+
+  it('hands the push step ids only, and the phone alert is rebuilt from them', async () => {
+    const now = new Date('2033-02-01T18:00:00Z')
+    const [ev] = await db.insert(flightEvent).values({ flightId, at: now, kind: 'cancelled' }).returning()
+    const res = await sendFlightAlerts(db, { now, origin: 'https://app.test', simulated: true, send })
+    expect(res.eventIds).toEqual([ev!.id])
+    // What the job keeps in its history: counts and ids, no names or flights.
+    expect(JSON.stringify(res)).not.toMatch(/cancel|arrivals|\(/i)
+    const notice = await flightAlertNotice(db, res.eventIds, true)
+    expect(notice?.title).toContain('flight is cancelled')
+    expect(notice?.body).toContain('Simulated demo flights')
+    expect(notice?.path).toBe('/arrivals')
+    expect(await flightAlertNotice(db, [], true)).toBeNull()
   })
 
   it('if every email fails, the change is put back for the retry', async () => {

@@ -216,7 +216,54 @@ board, so the demo can stay on the simulated feed.
 AeroDataBox can only reach a public address, so pushes work on the
 production domain, not on previews (those need a Vercel sign-in).
 
-**Not yet:** phone push alerts (web push needs VAPID keys and a service worker).
+A flight test also sends a phone alert to the starter's devices, when phone
+alerts are on for them (below).
+
+## Phone alerts (Web Push)
+
+The same flight changes that go out by email also show up as phone
+notifications for Company Managers who turn them on, per device, at
+**Alerts** (`/settings/alerts`). It's free: the browsers' own push services
+(Apple, Google, Mozilla, Microsoft) deliver them, signed with this app's
+VAPID keys, through the `web-push` package.
+
+- **iPhone and iPad** (iOS 16.4 or later) only allow web alerts for an app
+  opened from the Home Screen: in Safari, Share, then Add to Home Screen.
+  The Home Screen app keeps its own sign-in, so sign in again there (with
+  two-factor), then turn alerts on. The Alerts page walks through it.
+  Android, Chrome, Edge, Firefox and desktop Safari work in the browser.
+- **The service worker** (`public/sw.js`) only shows alerts and opens the
+  Arrivals board when one is tapped. It caches nothing. Messages use the
+  Declarative Web Push shape (`web_push: 8030`), so newer Safari can show
+  them without the script.
+- **Devices** live in `push_subscription` (login, device name, the push
+  service's address and keys). A device is removed when its push service
+  says it's gone (404 or 410), after 5 failed sends in a row, when turned off
+  on the Alerts page, and when its login signs out on it. Opening the app
+  quietly refreshes a device's keys if the browser changed them, but never
+  turns alerts on by itself.
+- **Sending.** The push is its own Inngest step after the email step, with
+  the same changes, so a push that fails never resends an email and a retry
+  never repeats a push. Alerts say who, which flight and what changed: no
+  contact details or booking codes. The audit log records counts only.
+- **Who can get them.** Company Manager logins with two-factor on that can
+  see travel. The guest demo and demo logins (example.com and other reserved
+  domains) can never turn them on or receive one. Subscriptions must point at
+  a known push service, so nobody can make the server call other addresses.
+
+Settings (Vercel, Production):
+
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: make them once with
+  `npx web-push generate-vapid-keys` and keep the private one secret.
+  Changing them means every device has to turn alerts on again.
+- `VAPID_SUBJECT`: who runs the server, for the push services, as an https
+  URL or `mailto:`. Defaults to the app's address.
+- `PUSH_DELIVERY`: `off` (default), `allowlist` (only logins in
+  `PUSH_ALLOWLIST`) or `live` (every Company Manager who turned them on).
+- `PUSH_ALLOWLIST`: comma-separated login emails for allowlist mode.
+
+**Not yet:** offline Arrivals (caching the board on the phone needs care to
+clear it on sign-out).
 
 ## Guest demo
 
