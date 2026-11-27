@@ -670,6 +670,8 @@ export const flightEvent = pgTable(
     at: timestamp('at', { withTimezone: true }).notNull(),
     kind: flightEventKind('kind').notNull(),
     detail: jsonb('detail').$type<Record<string, unknown>>(),
+    /** When the scheduled job took this change for an email alert. Null until then. */
+    alertedAt: timestamp('alerted_at', { withTimezone: true }),
   },
   (t) => [index('flight_event_flight_id_idx').on(t.flightId, t.at)],
 )

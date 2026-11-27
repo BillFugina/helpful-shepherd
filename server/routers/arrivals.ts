@@ -68,8 +68,8 @@ export const arrivalsRouter = router({
   /**
    * The travel-day board: who lands and leaves on a theater-local day, with
    * live flight status, cars, where they sleep tonight, and alerts. Looking at
-   * the board also runs the flight tracker (throttled per flight), until the
-   * scheduled job exists.
+   * the board also runs the flight tracker (throttled per flight), alongside
+   * the scheduled job.
    */
   board: staffProcedure.input(boardInput).query(async ({ ctx, input }) => {
     requireView(ctx.grants, 'travel_logistics')

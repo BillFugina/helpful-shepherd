@@ -17,6 +17,10 @@
       "destination": "/api/mcp"
     },
     {
+      "source": "/api/inngest",
+      "destination": "/api/inngest"
+    },
+    {
       "source": "/.well-known/:path*",
       "destination": "/api/well-known"
     },
