@@ -145,8 +145,11 @@ export function ArrivalsPage() {
         </p>
       ) : null}
       <p className="muted small">
-        Flight status comes from a simulated feed for the demo, and refreshes every minute while this page is open.
+        {b.clock.provider === 'aerodatabox'
+          ? 'Flight data: AeroDataBox. Updates arrive as they happen; this page refreshes every minute while it’s open.'
+          : 'Flight status comes from a simulated feed for the demo, and refreshes every minute while this page is open.'}
       </p>
+      {!guest && me.data?.role === ADMIN_ROLE ? <LiveTest /> : null}
     </section>
   )
 }
@@ -395,6 +398,94 @@ function DemoClock({ board: b, own }: { board: Board; own: ((offsetMs: number) =
       {setClock.error || resetClock.error ? (
         <p className="error">{errorText(setClock.error ?? resetClock.error)}</p>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * For staff: watch any real flight for a few hours and see AeroDataBox's
+ * updates arrive, without touching the demo people. Shown only when an
+ * AeroDataBox key is set. Each update costs one credit.
+ */
+function LiveTest() {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const [number, setNumber] = useState('')
+  const tests = useQuery({ ...trpc.arrivals.liveTests.queryOptions(), refetchInterval: 30_000 })
+  const refresh = () => queryClient.invalidateQueries({ queryKey: trpc.arrivals.liveTests.queryKey() })
+  const start = useMutation(
+    trpc.arrivals.startLiveTest.mutationOptions({
+      onSuccess: () => {
+        setNumber('')
+        return refresh()
+      },
+    }),
+  )
+  const stop = useMutation(trpc.arrivals.stopLiveTest.mutationOptions({ onSuccess: refresh }))
+  if (!tests.data?.available) return null
+
+  return (
+    <div className="card live-test">
+      <h2>Watch a real flight (test)</h2>
+      <p className="small">
+        Enter a flight that flies in the next few hours. Updates show here and are emailed to you. The test ends when
+        the flight lands, or after 12 hours. Each update costs one AeroDataBox credit.
+      </p>
+      <form
+        className="actions"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (number.trim()) start.mutate({ flightNumber: number })
+        }}
+      >
+        <input
+          aria-label="Flight number"
+          placeholder="B6 1017"
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+          maxLength={12}
+        />
+        <button type="submit" disabled={start.isPending || !number.trim()}>
+          Start watching
+        </button>
+      </form>
+      {start.error || stop.error ? <p className="error">{errorText(start.error ?? stop.error)}</p> : null}
+      {tests.data.tests.map((t) => (
+        <div key={t.id} className="live-test-run">
+          <p className="small">
+            <strong>{t.flightNumber}</strong> {t.active ? (t.subscribed ? 'watching' : 'subscribing…') : 'ended'},
+            started {formatTime(t.startedAt, THEATRE_TZ)}
+            {t.creditsRemaining !== null ? `, ${t.creditsRemaining} credits left` : ''}
+            {t.active ? (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className="link"
+                  disabled={stop.isPending}
+                  onClick={() => stop.mutate({ id: t.id })}
+                >
+                  Stop
+                </button>
+              </>
+            ) : null}
+          </p>
+          {t.pushes.length ? (
+            <ul className="plain small">
+              {t.pushes.map((p) => (
+                <li key={p.id}>
+                  <span className="muted">{formatTime(p.receivedAt, THEATRE_TZ)}</span> {p.number}
+                  {p.fromAirport && p.toAirport ? ` ${p.fromAirport} to ${p.toAirport}` : ''}: {p.status}
+                  {p.summary ? `. ${p.summary}` : ''}
+                </li>
+              ))}
+            </ul>
+          ) : t.active ? (
+            <p className="muted small">No updates yet. They come when something about the flight changes.</p>
+          ) : null}
+        </div>
+      ))}
+      <p className="muted small">Flight data: AeroDataBox.</p>
     </div>
   )
 }

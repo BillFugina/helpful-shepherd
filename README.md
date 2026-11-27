@@ -65,8 +65,8 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   status, gate, baggage claim, car pickup, where they sleep tonight, Call and
   Text buttons, and Mark arrived. People expected that day with no flight
   logged are listed too. It refreshes every minute and works on a phone.
-- **Simulated flight feed.** No paid API: `server/flights/provider.ts` sits
-  behind the same adapter a real feed (AeroDataBox, per the plan) would use.
+- **Simulated flight feed.** The demo's default: `server/flights/provider.ts`
+  sits behind the same adapter as the real AeroDataBox feed (see below).
   What happens to a flight depends on the last digit of its number: 9
   cancelled, 7 late by 45 minutes, 4 late by 95, 3 gate change, 1 lands 12
   minutes early, anything else on time. Changes are logged as alerts.
@@ -84,8 +84,8 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   that trip warnings in the second production. The first travel day is Jan 10,
   2027, with a delay, a gate change and an early landing.
 
-The tracker also runs when someone looks at the board, throttled to once a
-minute per flight, so the board works with or without the scheduled job below.
+With the simulated feed, the tracker runs when someone looks at the board,
+throttled to once a minute per flight. Nothing polls in the background.
 
 ## What's here (housing)
 
@@ -149,21 +149,31 @@ account is needed; swapping in Blob later is a contained change.
 
 ## Flight alerts and "arriving tomorrow" (Inngest)
 
-Two scheduled functions, served at `/api/inngest`:
+Nothing polls. Inngest functions, served at `/api/inngest`, run only when
+something happens:
 
-- **Check flights** every 15 minutes from 6 AM to 10:45 PM Raleigh time
-  (overnight it rests so the free-tier database can sleep). It runs the same
-  tracker as the board, through the same feed adapter and demo clock, then
-  emails the Company Manager what changed: a delay, a gate change, a
-  cancellation or a landing. One email per run, each change only once.
-  Changes more than six hours old (in the feed's time) are marked done
-  without an email.
+- **Watch a booked flight** (`FLIGHT_FEED=aerodatabox` only). Saving or
+  rebooking a flight starts a run that sleeps until 3 hours before take-off,
+  then subscribes to the flight's number with AeroDataBox's Flight Alert Push
+  API. Flights with the same number share one subscription. AeroDataBox posts
+  each change to `/api/flight-push/<token>`, which checks the token, hands
+  the push to Inngest and answers at once. The push is matched to the booked
+  flight by number, route and scheduled departure (the subscription is by
+  number only), written to the board, and emailed to the Company Manager: a
+  delay, a gate change, a cancellation or a landing. A landing or
+  cancellation removes the subscription; if neither arrives, it's removed 6
+  hours after the latest known arrival. Removing the flight removes it too.
+- **Alert emails with the simulated feed.** The board logs changes when it's
+  opened, and sends one event to email them. Changes more than six hours old
+  (in the feed's time) are marked done without an email.
 - **Arriving tomorrow** at 6 PM: one email per production with anyone
   landing the next day (the feed's next day, so it follows the demo clock):
   their flight in, car pickup, and the place and room name where they sleep.
   Never an address, door code or how to get in, and no phone numbers or
   booking codes in any email. A production gets one summary per day, even if
-  the job runs twice.
+  the job runs twice. This is the one scheduled run left: once a day.
+- **Credits.** Each flight in a push costs one AeroDataBox credit. When a
+  push says fewer than 25 are left, Company Managers get one warning a day.
 
 Emails go to Company Manager logins that have finished two-factor setup,
 through the same email settings as reminders, so in allowlist mode only
@@ -175,6 +185,20 @@ To turn it on, install the Inngest integration on the Vercel project (it sets
 `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY`), redeploy, and sync the app in
 Inngest at `https://<your domain>/api/inngest`. Locally, set `INNGEST_DEV=1`
 and run `npx inngest-cli@latest dev -u http://localhost:3001/api/inngest`.
+
+### Live flight test (AeroDataBox)
+
+With `AERODATABOX_API_KEY` set (from AeroDataBox directly, sent as
+`X-Api-Key`), Company Managers see **Watch a real flight (test)** at the
+bottom of the Arrivals page. Enter any real flight number flying in the next
+few hours: the app subscribes right away, lists each update as it arrives
+(flight data only), and emails the person who started it when the status
+changes. A test ends when the flight lands or is cancelled, after 12 hours,
+or on Stop. At most two run at once. It doesn't touch the demo people or the
+board, so the demo can stay on the simulated feed.
+
+AeroDataBox can only reach a public address, so pushes work on the
+production domain, not on previews (those need a Vercel sign-in).
 
 **Not yet:** phone push alerts (web push needs VAPID keys and a service worker).
 

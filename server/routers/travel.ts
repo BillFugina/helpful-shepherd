@@ -31,6 +31,7 @@ import {
   production,
   rentalCar,
 } from '../db/schema.js'
+import { flightRemoved, flightSaved } from '../flights/announce.js'
 import { staysInWindow, stayWindow, visibleWarnings } from '../travel/housing.js'
 import {
   flightRecord,
@@ -206,7 +207,7 @@ export const travelRouter = router({
   addFlight: staffProcedure.input(addFlightInput).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['travel_logistics'])
     const { engagementId, ...fields } = input
-    return friendly(() =>
+    const saved = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const e = await engagementOrThrow(tx, engagementId)
         const [row] = await tx
@@ -225,12 +226,15 @@ export const travelRouter = router({
         return { id: row!.id }
       }),
     )
+    await flightSaved(saved.id)
+    return saved
   }),
 
   updateFlight: staffProcedure.input(updateFlightInput).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['travel_logistics'])
     const { id, ...fields } = input
-    return friendly(() =>
+    let rebooked = false
+    const saved = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [before] = await tx
           .select({ flight, personId: engagement.personId })
@@ -240,7 +244,7 @@ export const travelRouter = router({
           .limit(1)
         if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'That flight no longer exists.' })
         const next = flightColumns(fields)
-        const rebooked =
+        rebooked =
           next.airline !== before.flight.airline ||
           next.flightNumber !== before.flight.flightNumber ||
           next.scheduledDeparture.getTime() !== before.flight.scheduledDeparture.getTime() ||
@@ -260,19 +264,28 @@ export const travelRouter = router({
         return { id }
       }),
     )
+    // A new flight number or time needs a new watch; other edits keep the old one.
+    if (rebooked) await flightSaved(id)
+    return saved
   }),
 
   removeFlight: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['travel_logistics'])
-    return friendly(() =>
+    let subscriptionId: string | null = null
+    const removed = await friendly(() =>
       ctx.db.transaction(async (tx) => {
         const [before] = await tx
-          .select({ engagementId: flight.engagementId, personId: engagement.personId })
+          .select({
+            engagementId: flight.engagementId,
+            personId: engagement.personId,
+            subscriptionId: flight.pushSubscriptionId,
+          })
           .from(flight)
           .innerJoin(engagement, eq(engagement.id, flight.engagementId))
           .where(eq(flight.id, input.id))
           .limit(1)
         if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'That flight no longer exists.' })
+        subscriptionId = before.subscriptionId
         await tx.delete(flight).where(eq(flight.id, input.id))
         await auditChange(tx, ctx.user, {
           action: 'delete',
@@ -286,6 +299,8 @@ export const travelRouter = router({
         return { id: input.id }
       }),
     )
+    await flightRemoved(input.id, subscriptionId)
+    return removed
   }),
 
   addCar: staffProcedure.input(addRentalCarInput).mutation(async ({ ctx, input }) => {

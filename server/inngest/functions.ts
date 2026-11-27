@@ -1,42 +1,243 @@
+import { eq } from 'drizzle-orm'
 import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import { sendArrivalSummaries } from '../alerts/arrivals-summary.js'
 import { sendFlightAlerts } from '../alerts/flight-alerts.js'
+import { companyManagers, greeting } from '../alerts/recipients.js'
 import { db } from '../db/client.js'
+import { flight } from '../db/schema.js'
+import { sendEmail } from '../email/send.js'
 import { appOrigin } from '../env.js'
-import { flightProvider } from '../flights/provider.js'
-import { feedNow, trackFlights } from '../flights/track.js'
+import type { AdbNotification } from '../flights/aerodatabox.js'
+import { flightProvider, pushFeedOn, simulatedProvider } from '../flights/provider.js'
+import {
+  adbFromEnv,
+  applyPush,
+  endSubscription,
+  LOW_CREDITS,
+  releaseFlight,
+  releaseIfUnused,
+  starterEmail,
+  TEST_HOURS,
+  watchFlight,
+} from '../flights/push.js'
+import { feedNow } from '../flights/track.js'
 import { inngest } from './client.js'
 
-/**
- * Every 15 minutes from 6 AM to 10:45 PM theatre time. Overnight it rests, so
- * the free-tier database can sleep; the board still checks flights whenever
- * someone opens it.
- */
-export const TRACK_CRON = 'TZ=America/New_York */15 6-22 * * *'
+// Nothing here polls. Booked flights are watched only from 3 hours before
+// take-off until they land (AeroDataBox pushes the changes), and the alert
+// email goes out when a change is logged. The only schedule left is the
+// 6 PM "arriving tomorrow" email.
+
 /** 6 PM theatre time, for the next day's arrivals. */
 export const SUMMARY_CRON = 'TZ=America/New_York 0 18 * * *'
 
+const HOUR = 3_600_000
+/** Start watching this long before take-off. */
+export const WATCH_BEFORE_MS = 3 * HOUR
+/** Stop watching this long after the latest known arrival, if no landing ever arrives. */
+export const FALLBACK_AFTER_MS = 6 * HOUR
+/** Sleeps are split so none is longer than the Inngest plan allows. */
+const MAX_SLEEP_MS = 6 * 24 * HOUR
+
+interface Sleeper {
+  sleepUntil: (id: string, time: Date) => Promise<unknown>
+}
+
+/** Sleeps until `target`, in pieces no longer than six days, counting from `from` so replays take the same steps. */
+export async function sleepInPieces(step: Sleeper, id: string, from: number, target: Date): Promise<void> {
+  let cursor = from
+  let i = 0
+  while (target.getTime() - cursor > MAX_SLEEP_MS) {
+    cursor += MAX_SLEEP_MS
+    await step.sleepUntil(`${id}-${i++}`, new Date(cursor))
+  }
+  await step.sleepUntil(`${id}-${i}`, target)
+}
+
+function api() {
+  const client = adbFromEnv()
+  if (!client) throw new Error('AERODATABOX_API_KEY is not set')
+  return client
+}
+
+const finished = (status: string | null) => status === 'landed' || status === 'cancelled'
+
 /**
- * Asks the flight feed about flights in the air or due within the day (the
- * same tracker the board runs, through the same provider adapter and demo
- * clock), then emails the Company Manager what changed.
+ * One run per booked flight (started when it's saved). Sleeps until 3 hours
+ * before take-off, joins or creates the subscription for its number, then
+ * sleeps past the arrival as a fallback and lets go. A landing or
+ * cancellation lets go sooner (apply-flight-push). Saving the flight again
+ * replaces this run; removing it cancels it (release-removed-flight lets go).
  */
-export const trackFlightsJob = inngest.createFunction(
-  { id: 'track-flights', name: 'Check flights and email alerts', triggers: { cron: TRACK_CRON }, concurrency: 1 },
-  async ({ step }) => {
-    const tracked = await step.run('check-flights', async () => {
-      const provider = flightProvider()
-      return trackFlights(db(), provider, await feedNow(db(), provider))
+export const watchFlightJob = inngest.createFunction(
+  {
+    id: 'watch-flight',
+    name: 'Watch a booked flight',
+    triggers: { event: 'app/flight.saved' },
+    cancelOn: [
+      { event: 'app/flight.saved', match: 'data.flightId' },
+      { event: 'app/flight.removed', match: 'data.flightId' },
+    ],
+  },
+  async ({ event, step }) => {
+    const flightId = String(event.data.flightId)
+    const plan = await step.run('plan', async () => {
+      if (!pushFeedOn()) return null
+      // Saved again, maybe as another flight: let go of any earlier watch first.
+      await releaseFlight(db(), api(), flightId)
+      const [f] = await db().select().from(flight).where(eq(flight.id, flightId))
+      if (!f || finished(f.liveStatus)) return null
+      return {
+        watchFrom: f.scheduledDeparture.getTime() - WATCH_BEFORE_MS,
+        until: f.scheduledArrival.getTime() + FALLBACK_AFTER_MS,
+      }
     })
-    const alerted = await step.run('email-alerts', async () => {
+    if (!plan) return { watched: false }
+
+    await sleepInPieces(step, 'until-take-off', event.ts ?? plan.watchFrom, new Date(plan.watchFrom))
+    const subscriptionId = await step.run('subscribe', () => watchFlight(db(), api(), flightId, appOrigin()))
+    if (!subscriptionId) return { watched: false }
+
+    // Fallback: if no landing arrives, stop a while after the arrival. A late
+    // flight moves that point out, up to three times.
+    let until = plan.until
+    for (let round = 0; round < 3; round++) {
+      await sleepInPieces(step, `fallback-${round}`, plan.watchFrom, new Date(until))
+      const later = await step.run(`check-${round}`, async () => {
+        const [f] = await db().select().from(flight).where(eq(flight.id, flightId))
+        if (!f?.pushSubscriptionId || finished(f.liveStatus)) return null
+        const next = (f.liveArrival ?? f.scheduledArrival).getTime() + FALLBACK_AFTER_MS
+        return next > until ? next : null
+      })
+      if (!later) break
+      until = later
+    }
+    await step.run('release', () => releaseFlight(db(), api(), flightId))
+    return { watched: true }
+  },
+)
+
+/** A removed flight: end its subscription if no other flight uses it. */
+export const releaseRemovedFlightJob = inngest.createFunction(
+  { id: 'release-removed-flight', name: 'Stop watching a removed flight', triggers: { event: 'app/flight.removed' } },
+  async ({ event, step }) => {
+    const subscriptionId = event.data.subscriptionId ? String(event.data.subscriptionId) : null
+    if (!subscriptionId) return { released: false }
+    return { released: await step.run('release', () => releaseIfUnused(db(), api(), subscriptionId)) }
+  },
+)
+
+/**
+ * One push from AeroDataBox (handed over by /api/flight-push). Applies it,
+ * emails what changed, stops watching flights that landed or were cancelled,
+ * and warns when credits run low.
+ */
+export const applyFlightPushJob = inngest.createFunction(
+  {
+    id: 'apply-flight-push',
+    name: 'Apply a flight update from AeroDataBox',
+    triggers: { event: 'aerodatabox/push' },
+    concurrency: { key: 'event.data.subscriptionId', limit: 1 },
+  },
+  async ({ event, step }) => {
+    const subscriptionId = String(event.data.subscriptionId)
+    const payload = (event.data.payload ?? {}) as AdbNotification
+    const result = await step.run('apply', () => applyPush(db(), subscriptionId, payload, new Date()))
+
+    if (result.events) {
+      await step.run('email-alerts', () =>
+        sendFlightAlerts(db(), { now: new Date(), origin: appOrigin(), simulated: false }),
+      )
+    }
+    for (const flightId of result.finished) {
+      await step.run(`release-${flightId}`, () => releaseFlight(db(), api(), flightId))
+    }
+    if (result.testLines.length) {
+      await step.run('email-test', async () => {
+        const to = await starterEmail(db(), result.startedBy)
+        if (!to) return null
+        const text = [
+          greeting(to.name),
+          '',
+          'Your flight test got an update from AeroDataBox:',
+          '',
+          ...result.testLines.map((l) => `- ${l}`),
+          '',
+          `Arrivals board: ${appOrigin()}/arrivals`,
+          '',
+          'Flight data: AeroDataBox. This is a test of live flight alerts.',
+        ].join('\n')
+        return (await sendEmail({ to: to.email, subject: 'Flight test update', text }, { isDemo: false })).delivery
+      })
+    }
+    if (result.testFinished) {
+      await step.run('end-test', () => endSubscription(db(), api(), subscriptionId))
+    }
+    if (result.credits !== null && result.credits < LOW_CREDITS) {
+      // The event id makes this at most one warning a day.
+      await step.sendEvent('credits-low', {
+        id: `credits-low-${localDate(new Date(), THEATRE_TZ)}`,
+        name: 'app/credits.low',
+        data: { credits: result.credits },
+      })
+    }
+    return { stored: result.stored, events: result.events, finished: result.finished.length }
+  },
+)
+
+/** Tells the Company Managers the AeroDataBox balance is running out. */
+export const lowCreditsJob = inngest.createFunction(
+  { id: 'warn-low-credits', name: 'Warn when flight alert credits run low', triggers: { event: 'app/credits.low' } },
+  async ({ event, step }) => {
+    const credits = Number(event.data.credits)
+    return step.run('email', async () => {
+      const recipients = await companyManagers(db(), 'travel_logistics')
+      for (const r of recipients) {
+        const text = [
+          greeting(r.name),
+          '',
+          `Live flight alerts have ${credits} credits left. Each flight update costs one credit. When they run out, AeroDataBox stops sending updates until the balance is topped up.`,
+          '',
+          'Sent by the theatre app.',
+        ].join('\n')
+        await sendEmail({ to: r.email, subject: 'Flight alert credits are low', text }, { isDemo: false })
+      }
+      return { recipients: recipients.length }
+    })
+  },
+)
+
+/** A staff flight test ends after a few hours even if the flight never lands. */
+export const endFlightTestJob = inngest.createFunction(
+  { id: 'end-flight-test', name: 'End a flight test', triggers: { event: 'app/flight-test.started' } },
+  async ({ event, step }) => {
+    const subscriptionId = String(event.data.subscriptionId)
+    await step.sleep('test-window', `${TEST_HOURS}h`)
+    return { ended: await step.run('end', () => endSubscription(db(), api(), subscriptionId)) }
+  },
+)
+
+/**
+ * Emails the Company Manager what the board just logged with the simulated
+ * feed. The board sends the event when it logs a change (no polling); the
+ * real feed emails from apply-flight-push instead.
+ */
+export const flightAlertsJob = inngest.createFunction(
+  {
+    id: 'email-flight-alerts',
+    name: 'Email flight alerts',
+    triggers: { event: 'app/flights.changed' },
+    concurrency: 1,
+  },
+  async ({ step }) => {
+    return step.run('email-alerts', async () => {
       const provider = flightProvider()
       return sendFlightAlerts(db(), {
         now: await feedNow(db(), provider),
         origin: appOrigin(),
-        simulated: provider.name === 'simulated',
+        simulated: provider === simulatedProvider,
       })
     })
-    return { ...tracked, ...alerted }
   },
 )
 
@@ -54,4 +255,12 @@ export const arrivalSummaryJob = inngest.createFunction(
   },
 )
 
-export const functions = [trackFlightsJob, arrivalSummaryJob]
+export const functions = [
+  watchFlightJob,
+  releaseRemovedFlightJob,
+  applyFlightPushJob,
+  lowCreditsJob,
+  endFlightTestJob,
+  flightAlertsJob,
+  arrivalSummaryJob,
+]

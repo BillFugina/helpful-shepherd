@@ -21,6 +21,10 @@
       "destination": "/api/inngest"
     },
     {
+      "source": "/api/flight-push/:token",
+      "destination": "/api/flight-push"
+    },
+    {
       "source": "/.well-known/:path*",
       "destination": "/api/well-known"
     },
