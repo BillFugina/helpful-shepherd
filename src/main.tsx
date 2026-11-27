@@ -26,6 +26,7 @@ import { PeoplePage } from './pages/PeoplePage'
 import { PersonPage } from './pages/PersonPage'
 import { SeasonPage } from './pages/SeasonPage'
 import { SeasonsPage } from './pages/SeasonsPage'
+import { RequestPasswordLinkPage, SetPasswordPage } from './pages/SetPasswordPage'
 import { SetupTwoFactorPage } from './pages/SetupTwoFactorPage'
 import { SignInPage } from './pages/SignInPage'
 import { TravelPage } from './pages/TravelPage'
@@ -40,6 +41,8 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/sign-in', element: <SignInPage /> },
+      { path: '/set-password', element: <RequestPasswordLinkPage /> },
+      { path: '/set-password/:token', element: <SetPasswordPage /> },
       { path: '/demo', element: <DemoPage /> },
       { path: '/setup-2fa', element: <SetupTwoFactorPage /> },
       { path: '/connect', element: <ConnectPage /> },

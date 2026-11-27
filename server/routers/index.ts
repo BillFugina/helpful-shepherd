@@ -13,6 +13,7 @@ import { draftsRouter } from './drafts.js'
 import { engagementsRouter } from './engagements.js'
 import { housingRouter } from './housing.js'
 import { importRouter } from './import.js'
+import { passwordRouter } from './password.js'
 import { peopleRouter } from './people.js'
 import { productionsRouter, seasonsRouter } from './seasons.js'
 import { travelRouter } from './travel.js'
@@ -48,6 +49,8 @@ export const appRouter = router({
   documents: documentsRouter,
   /** The page behind an upload link. Public: the link is the key. */
   uploadLink: uploadLinkRouter,
+  /** Set or reset a staff password by email link. Public: the link is the key. */
+  password: passwordRouter,
 })
 
 export type AppRouter = typeof appRouter
