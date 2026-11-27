@@ -195,7 +195,12 @@ function parseJson(text: string): unknown {
  */
 async function readBalanceReply(res: Response, what: string): Promise<number | null> {
   if (res.status === 204) return null
-  const text = await res.text().catch(() => '')
+  const text = await res.text().catch(() => null)
+  if (text === null) {
+    // The body failed to arrive: unreadable, not empty.
+    if (what === 'balance') throw new AdbError(res.status, `${what} (body could not be read)`)
+    return null
+  }
   if (!text.trim()) return null
   const json = parseJson(text)
   const credits = readCredits(json)

@@ -161,6 +161,17 @@ describe('AeroDataBox pushes, without a database', () => {
     await expect(reply(() => Response.json({ odd: 1 })).balance()).rejects.toThrow('unreadable reply')
     expect(await reply(() => Response.json({ odd: 1 })).refill(50)).toBeNull()
     expect(String(warn.mock.calls[0]?.[0])).toContain('keys: odd')
+    const broken = () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.error(new Error('cut off'))
+          },
+        }),
+        { status: 200 },
+      )
+    await expect(reply(broken).balance()).rejects.toThrow('body could not be read')
+    expect(await reply(broken).refill(50)).toBeNull()
     warn.mockRestore()
   })
 
