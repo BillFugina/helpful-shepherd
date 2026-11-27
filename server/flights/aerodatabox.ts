@@ -63,7 +63,8 @@ export function parseUtc(value: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-const best = (m: AdbMovement | null | undefined): Date | null =>
+/** The best time known for one end of a flight: actual, then revised, predicted, scheduled. */
+export const bestTime = (m: AdbMovement | null | undefined): Date | null =>
   parseUtc(m?.runwayTime?.utc) ??
   parseUtc(m?.revisedTime?.utc) ??
   parseUtc(m?.predictedTime?.utc) ??
@@ -74,6 +75,33 @@ const TERMINAL_STATUSES = ['Arrived', 'Canceled', 'CanceledUncertain'] as const
 /** True once nothing more will happen to the flight: it landed or was cancelled. */
 export function isFinal(status: string | null | undefined): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status ?? '')
+}
+
+/**
+ * The runway time at one end, once it has passed. AeroDataBox also fills the
+ * runway time with an estimate before it happens, sometimes just the scheduled
+ * time copied over, so a runway time that equals the schedule only counts once
+ * it is well in the past.
+ */
+export function happenedAt(m: AdbMovement | null | undefined, now: Date): Date | null {
+  const t = parseUtc(m?.runwayTime?.utc)
+  if (!t || t.getTime() > now.getTime()) return null
+  const scheduled = parseUtc(m?.scheduledTime?.utc)
+  const copied = !!scheduled && Math.abs(t.getTime() - scheduled.getTime()) < 60_000
+  if (copied && now.getTime() - t.getTime() < 15 * 60_000) return null
+  return t
+}
+
+/**
+ * The flight's status. AeroDataBox often sends "Unknown" even for flights in
+ * the air or on the ground, so in that case it is worked out from the times.
+ */
+export function effectiveStatus(item: AdbFlightItem, now: Date): string {
+  const raw = item.status?.trim()
+  if (raw && raw !== 'Unknown') return raw
+  if (happenedAt(item.arrival, now)) return 'Arrived'
+  if (happenedAt(item.departure, now)) return 'Departed'
+  return 'Expected'
 }
 
 /** How far a push's scheduled departure may be from the booking and still be the same flight. */
@@ -104,11 +132,12 @@ export function pickMatch(items: readonly AdbFlightItem[], f: FlightSpec): AdbFl
 }
 
 /** A pushed flight in the app's own terms, the same shape the simulated feed gives. */
-export function toLiveState(item: AdbFlightItem, f: FlightSpec): LiveState {
-  const departure = best(item.departure) ?? f.scheduledDeparture
-  const arrival = best(item.arrival) ?? f.scheduledArrival
+export function toLiveState(item: AdbFlightItem, f: FlightSpec, now: Date = new Date()): LiveState {
+  const departure = bestTime(item.departure) ?? f.scheduledDeparture
+  const arrival = bestTime(item.arrival) ?? f.scheduledArrival
   let status: LiveStatus
-  switch (item.status) {
+  const pushedStatus = effectiveStatus(item, now)
+  switch (pushedStatus) {
     case 'Canceled':
     case 'CanceledUncertain':
       status = 'cancelled'
@@ -124,7 +153,7 @@ export function toLiveState(item: AdbFlightItem, f: FlightSpec): LiveState {
       break
     default:
       status =
-        item.status === 'Delayed' || arrival.getTime() - f.scheduledArrival.getTime() >= 5 * 60_000
+        pushedStatus === 'Delayed' || arrival.getTime() - f.scheduledArrival.getTime() >= 5 * 60_000
           ? 'delayed'
           : 'scheduled'
   }
