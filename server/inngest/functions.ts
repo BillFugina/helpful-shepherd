@@ -96,8 +96,14 @@ export const watchFlightJob = inngest.createFunction(
     if (!plan) return { watched: false }
 
     await sleepInPieces(step, 'until-take-off', event.ts ?? plan.watchFrom, new Date(plan.watchFrom))
-    // Make sure there are credits, or AeroDataBox would send this flight nothing.
-    await step.sendEvent('credits-check', { name: CREDITS_CHECK, data: {} })
+    // Make sure there are credits first, or AeroDataBox would send this flight
+    // nothing. Waits for the top-up job (one at a time, so the monthly cap
+    // holds); if it fails or takes too long, watch anyway.
+    try {
+      await step.invoke('credits-check', { function: topUpCreditsJob, data: {}, timeout: '5m' })
+    } catch (error) {
+      console.error('Credit check before watching a flight did not finish', error)
+    }
     const subscriptionId = await step.run('subscribe', () => watchFlight(db(), api(), flightId, appOrigin()))
     if (!subscriptionId) return { watched: false }
 
