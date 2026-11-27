@@ -21,6 +21,7 @@ import {
   watchFlight,
 } from '../flights/push.js'
 import { feedNow } from '../flights/track.js'
+import { pushToCompanyManagers, pushToUser } from '../push/send.js'
 import { inngest } from './client.js'
 
 // Nothing here polls. Booked flights are watched only from 3 hours before
@@ -193,9 +194,12 @@ export const applyFlightPushJob = inngest.createFunction(
     const result = await step.run('apply', () => applyPush(db(), subscriptionId, payload, new Date()))
 
     if (result.events) {
-      await step.run('email-alerts', () =>
+      const emailed = await step.run('email-alerts', () =>
         sendFlightAlerts(db(), { now: new Date(), origin: appOrigin(), simulated: false }),
       )
+      // Its own step, after the emails: a push that fails never resends an email.
+      const notice = emailed.notice
+      if (notice) await step.run('push-alerts', () => pushToCompanyManagers(db(), notice))
     }
     for (const flightId of result.finished) {
       await step.run(`release-${flightId}`, () => releaseFlight(db(), api(), flightId))
@@ -217,6 +221,16 @@ export const applyFlightPushJob = inngest.createFunction(
         ].join('\n')
         return (await sendEmail({ to: to.email, subject: 'Flight test update', text }, { isDemo: false })).delivery
       })
+    }
+    if (result.testLines.length && result.startedBy) {
+      const startedBy = result.startedBy
+      await step.run('push-test', () =>
+        pushToUser(db(), startedBy, {
+          title: 'Flight test update',
+          body: result.testLines.join('\n'),
+          path: '/arrivals',
+        }),
+      )
     }
     if (result.testFinished) {
       await step.run('end-test', () => endSubscription(db(), api(), subscriptionId))
@@ -278,7 +292,7 @@ export const flightAlertsJob = inngest.createFunction(
     concurrency: 1,
   },
   async ({ step }) => {
-    return step.run('email-alerts', async () => {
+    const emailed = await step.run('email-alerts', async () => {
       const provider = flightProvider()
       return sendFlightAlerts(db(), {
         now: await feedNow(db(), provider),
@@ -286,6 +300,10 @@ export const flightAlertsJob = inngest.createFunction(
         simulated: provider === simulatedProvider,
       })
     })
+    // Its own step, after the emails: a push that fails never resends an email.
+    const notice = emailed.notice
+    const pushed = notice ? await step.run('push-alerts', () => pushToCompanyManagers(db(), notice)) : null
+    return { ...emailed, pushed }
   },
 )
 

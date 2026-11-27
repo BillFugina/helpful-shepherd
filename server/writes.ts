@@ -89,7 +89,7 @@ interface PgError {
   constraint?: string
 }
 
-function pgCause(error: unknown): PgError | null {
+export function pgCause(error: unknown): PgError | null {
   let e: unknown = error
   for (let i = 0; i < 4 && e && typeof e === 'object'; i++) {
     const code = (e as PgError).code

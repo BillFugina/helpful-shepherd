@@ -1,7 +1,10 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
 import { ADMIN_ROLE, levelAtLeast, levelFor, VIEWER_ROLE_LABELS } from '../../shared/access'
 import { authClient } from '../lib/auth-client'
+import { currentSubscription, saveEndpoint, savedEndpoint, toInput } from '../lib/push'
+import { useTRPC } from '../lib/trpc'
 import { useMe } from '../lib/useMe'
 
 export function Layout() {
@@ -12,8 +15,42 @@ export function Layout() {
   const staff = guest || (me.data?.twoFactorEnabled && me.data.role)
   const sees = (group: 'travel_logistics' | 'housing' | 'contracts' | 'documents') =>
     levelAtLeast(levelFor(me.data?.grants ?? {}, group), 'view')
+  const trpc = useTRPC()
+  const { mutateAsync: refreshPush } = useMutation(trpc.push.refresh.mutationOptions())
+  const { mutateAsync: unsubscribePush } = useMutation(trpc.push.unsubscribe.mutationOptions())
+  const canGetAlerts = !guest && me.data?.role === ADMIN_ROLE && me.data.twoFactorEnabled === true
+
+  // Keeps phone alerts working if the browser changed this device's keys or
+  // address. Only updates a device this login already turned on.
+  useEffect(() => {
+    if (!canGetAlerts) return
+    currentSubscription()
+      .then(async (sub) => {
+        if (!sub) return
+        const previous = savedEndpoint()
+        const res = await refreshPush({
+          ...toInput(sub),
+          ...(previous && previous !== sub.endpoint ? { previousEndpoint: previous } : {}),
+        })
+        saveEndpoint(res.on ? sub.endpoint : null)
+      })
+      .catch(() => undefined)
+  }, [canGetAlerts, refreshPush])
 
   async function signOut() {
+    // Phone alerts stop on this device when its login signs out.
+    if (!guest) {
+      try {
+        const sub = await currentSubscription()
+        if (sub) {
+          await unsubscribePush({ endpoint: sub.endpoint })
+          await sub.unsubscribe()
+        }
+        saveEndpoint(null)
+      } catch {
+        // Offline or blocked: sign out anyway. The server drops the device once pushes to it fail.
+      }
+    }
     await authClient.signOut()
     if (guest) {
       // Back to the home page, then refetch it: a guest may already be on it,
@@ -58,6 +95,11 @@ export function Layout() {
               {staff && !guest ? (
                 <NavLink to="/settings/connections" title="Connected apps">
                   Apps
+                </NavLink>
+              ) : null}
+              {canGetAlerts ? (
+                <NavLink to="/settings/alerts" title="Phone alerts">
+                  Alerts
                 </NavLink>
               ) : null}
               <span className="muted" title={me.data.email}>

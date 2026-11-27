@@ -15,4 +15,10 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // The service worker for phone alerts: plain JS, served as is.
+    extends: [js.configs.recommended],
+    files: ['public/sw.js'],
+    languageOptions: { ecmaVersion: 2022, sourceType: 'script', globals: { ...globals.serviceworker } },
+  },
 )

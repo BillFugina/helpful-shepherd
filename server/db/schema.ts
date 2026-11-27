@@ -732,6 +732,32 @@ export const flightEvent = pgTable(
   (t) => [index('flight_event_flight_id_idx').on(t.flightId, t.at)],
 )
 
+/**
+ * One device that turned on phone alerts (Web Push). The endpoint and keys
+ * come from the browser; they let the push service reach that one device and
+ * nothing else. Removed when the push service says it's gone, or on sign-out.
+ */
+export const pushSubscription = pgTable(
+  'push_subscription',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull().unique(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    /** "iPhone", "Android phone", "Mac": worked out by the browser, for the device list. */
+    deviceLabel: text('device_label').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Last time a push to this device was accepted. */
+    lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
+    /** Failed sends in a row, other than "gone". Reset by a good send. */
+    failures: integer('failures').notNull().default(0),
+  },
+  (t) => [index('push_subscription_user_id_idx').on(t.userId)],
+)
+
 export const rentalCar = pgTable(
   'rental_car',
   {

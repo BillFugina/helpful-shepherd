@@ -5,6 +5,7 @@ import { recordAudit } from '../audit.js'
 import type { Db } from '../db/client.js'
 import { engagement, flight, flightEvent, person, production } from '../db/schema.js'
 import { sendEmail, type Delivery } from '../email/send.js'
+import type { PushNotice } from '../push/send.js'
 import { shortName } from '../travel/records.js'
 import { companyManagers, greeting } from './recipients.js'
 
@@ -97,6 +98,21 @@ export function flightAlertEmail(input: {
   return { subject, text }
 }
 
+/** Changes listed in a phone alert before it says how many more there are. */
+const PUSH_LINES = 4
+
+/** The phone alert for the same changes: the email's subject as the title, one line per change. */
+export function flightAlertPush(input: { items: readonly AlertItem[]; simulated: boolean }): PushNotice {
+  const { items } = input
+  const first = items[0]!
+  const title =
+    items.length === 1 ? `${first.name}'s ${SUBJECT[first.kind] ?? 'flight changed'}` : `${items.length} flight updates`
+  const lines = items.slice(0, PUSH_LINES).map(describeAlert)
+  if (items.length > PUSH_LINES) lines.push(`And ${items.length - PUSH_LINES} more on the Arrivals board.`)
+  if (input.simulated) lines.push('Simulated demo flights, not real ones.')
+  return { title, body: lines.join('\n'), path: '/arrivals' }
+}
+
 type Send = typeof sendEmail
 
 export interface AlertRunResult {
@@ -104,6 +120,8 @@ export interface AlertRunResult {
   alerts: number
   /** What happened to each email, counted. */
   deliveries: Partial<Record<Delivery | 'failed', number>>
+  /** The phone alert for the same changes, for the next step to push. Null when nothing changed. */
+  notice: PushNotice | null
 }
 
 /**
@@ -131,7 +149,7 @@ export async function sendFlightAlerts(
   const fresh = claimed
     .filter((e) => isAlertKind(e.kind) && e.at.getTime() >= opts.now.getTime() - ALERT_FRESH_MS)
     .sort((a, b) => a.at.getTime() - b.at.getTime())
-  if (!fresh.length) return { alerts: 0, deliveries: {} }
+  if (!fresh.length) return { alerts: 0, deliveries: {}, notice: null }
 
   const rows = await db
     .select({
@@ -168,7 +186,7 @@ export async function sendFlightAlerts(
       },
     ]
   })
-  if (!items.length) return { alerts: 0, deliveries: {} }
+  if (!items.length) return { alerts: 0, deliveries: {}, notice: null }
 
   const recipients = await companyManagers(db, 'travel_logistics')
   const deliveries: AlertRunResult['deliveries'] = {}
@@ -212,5 +230,5 @@ export async function sendFlightAlerts(
     // Counts only: no names, flights or addresses.
     detail: { alerts: items.length, recipients: recipients.length, deliveries },
   })
-  return { alerts: items.length, deliveries }
+  return { alerts: items.length, deliveries, notice: flightAlertPush({ items, simulated: opts.simulated }) }
 }
