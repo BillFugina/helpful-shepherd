@@ -458,49 +458,57 @@ async function remindOne(ctx: { db: Db; user: SessionUser }, engagementId: strin
     return skip('A reminder went out within the last hour.')
   }
   const theatre = (await loadOrganization(ctx.db)).name ?? ''
+  // The link is saved before the email goes, so a link someone receives always
+  // exists. If the send fails, the unused link is turned off.
+  const link = await issueLink(ctx.db, ctx.user, row, forms)
+  const firstName = row.preferredName?.trim() || row.legalName.trim().split(/\s+/)[0] || ''
+  const email = reminderEmail({
+    firstName,
+    theatre,
+    productionTitle: row.title,
+    forms,
+    url: link.url,
+    expiresAt: link.expiresAt,
+    senderName: ctx.user.name,
+  })
+  let result: Awaited<ReturnType<typeof sendEmail>>
   try {
-    return await ctx.db.transaction(async (tx) => {
-      const link = await issueLink(tx, ctx.user, row, forms)
-      const firstName = row.preferredName?.trim() || row.legalName.trim().split(/\s+/)[0] || ''
-      const email = reminderEmail({
-        firstName,
-        theatre,
-        productionTitle: row.title,
-        forms,
-        url: link.url,
-        expiresAt: link.expiresAt,
-        senderName: ctx.user.name,
-      })
-      const result = await sendEmail({ to, ...email, replyTo: ctx.user.email }, { isDemo: row.isDemo })
-      if (result.delivery === 'sent') {
-        // One live link per person: the one in the email they just got.
-        await tx
-          .update(uploadLink)
-          .set({ revokedAt: new Date() })
-          .where(and(eq(uploadLink.engagementId, row.id), isNull(uploadLink.revokedAt), ne(uploadLink.id, link.id)))
-      }
-      await recordAudit(tx, {
-        actorId: ctx.user.id,
-        actorEmail: ctx.user.email,
-        action: 'send',
-        recordType: REMINDER_RECORD,
-        recordId: row.id,
-        personId: row.personId,
-        fieldGroup: 'documents',
-        // No address and no link: just what was asked for and what happened.
-        detail: { documentTypes: forms, delivery: result.delivery, linkId: link.id },
-      })
-      return {
-        engagementId,
-        name,
-        outcome: result.delivery,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.delivery === 'sent' ? {} : { email: { to, ...email } }),
-      }
-    })
+    result = await sendEmail({ to, ...email, replyTo: ctx.user.email }, { isDemo: row.isDemo })
   } catch (err) {
+    await ctx.db.update(uploadLink).set({ revokedAt: new Date() }).where(eq(uploadLink.id, link.id))
     return { engagementId, name, outcome: 'failed', reason: err instanceof Error ? err.message : 'Sending failed.' }
   }
+  const outcome: ReminderResult = {
+    engagementId,
+    name,
+    outcome: result.delivery,
+    ...(result.reason ? { reason: result.reason } : {}),
+    ...(result.delivery === 'sent' ? {} : { email: { to, ...email } }),
+  }
+  try {
+    if (result.delivery === 'sent') {
+      // One live link per person: the one in the email they just got.
+      await ctx.db
+        .update(uploadLink)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(uploadLink.engagementId, row.id), isNull(uploadLink.revokedAt), ne(uploadLink.id, link.id)))
+    }
+    await recordAudit(ctx.db, {
+      actorId: ctx.user.id,
+      actorEmail: ctx.user.email,
+      action: 'send',
+      recordType: REMINDER_RECORD,
+      recordId: row.id,
+      personId: row.personId,
+      fieldGroup: 'documents',
+      // No address and no link: just what was asked for and what happened.
+      detail: { documentTypes: forms, delivery: result.delivery, linkId: link.id },
+    })
+  } catch (err) {
+    // The email has already gone (or been handed back); report that truthfully.
+    console.error('reminder: bookkeeping failed after send', err instanceof Error ? err.message : err)
+  }
+  return outcome
 }
 
 const remindersRouter = router({
