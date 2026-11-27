@@ -181,7 +181,14 @@ export function readCredits(json: unknown): number | null {
   return null
 }
 
-/** Failed calls report the status only, never the key or the response body. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Reads a balance reply. Returns null for an empty reply (204 or no body),
  * and logs the shape of a reply it can't read so the field name can be fixed.
@@ -190,12 +197,7 @@ async function readBalanceReply(res: Response, what: string): Promise<number | n
   if (res.status === 204) return null
   const text = await res.text().catch(() => '')
   if (!text.trim()) return null
-  let json: unknown = null
-  try {
-    json = JSON.parse(text)
-  } catch {
-    json = null
-  }
+  const json = parseJson(text)
   const credits = readCredits(json)
   if (credits === null) {
     const keys = json && typeof json === 'object' ? Object.keys(json).join(',') : typeof json
@@ -209,6 +211,7 @@ async function readBalanceReply(res: Response, what: string): Promise<number | n
   return credits
 }
 
+/** Failed calls report the status only, never the key or the response body. */
 export class AdbError extends Error {
   constructor(
     readonly status: number,
