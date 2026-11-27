@@ -182,6 +182,12 @@ for her to copy. Demo people and reserved domains like example.com never get
 mail, the guest and the connector can't send, and the audit log records what
 was asked for without the address or the link.
 
+## Setting a password
+
+A staff login with no password yet, or a forgotten one, gets a link by email: "Set your password" on the sign-in page. The link goes only to the login's own address, works once, for an hour, and only its hash is stored (in the auth verification table). A login gets at most one such email every ten minutes, and the form says the same thing whether or not the address has a login. Setting the password signs that login out everywhere, disconnects its connected apps (Claude), and leaves two-factor alone: an account with it still needs its code, and one without is sent to set it up first. Nobody can create a login this way, and the guest demo and the Claude connector can't use it.
+
+It goes out through the same email settings as reminders, so in allowlist mode the address must be on `EMAIL_ALLOWLIST`.
+
 ## Local setup
 
 ```sh
