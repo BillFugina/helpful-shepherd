@@ -86,6 +86,7 @@ describe('replaying the flight feed for a guest clock', () => {
     liveTerminal: null,
     liveBaggage: null,
     liveCheckedAt: null,
+    pushSubscriptionId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   }
