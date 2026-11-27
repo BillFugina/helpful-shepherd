@@ -182,6 +182,33 @@ export function readCredits(json: unknown): number | null {
 }
 
 /** Failed calls report the status only, never the key or the response body. */
+/**
+ * Reads a balance reply. Returns null for an empty reply (204 or no body),
+ * and logs the shape of a reply it can't read so the field name can be fixed.
+ */
+async function readBalanceReply(res: Response, what: string): Promise<number | null> {
+  if (res.status === 204) return null
+  const text = await res.text().catch(() => '')
+  if (!text.trim()) return null
+  let json: unknown = null
+  try {
+    json = JSON.parse(text)
+  } catch {
+    json = null
+  }
+  const credits = readCredits(json)
+  if (credits === null) {
+    const keys = json && typeof json === 'object' ? Object.keys(json).join(',') : typeof json
+    console.warn(
+      `AeroDataBox ${what} reply had no credit count (HTTP ${res.status}, ${res.headers.get('content-type') ?? 'no type'}, keys: ${keys})`,
+    )
+    // An unreadable balance is not the same as an empty one. A refill that
+    // went through still counts; the caller reads the balance again.
+    if (what === 'balance') throw new AdbError(res.status, `${what} (unreadable reply)`)
+  }
+  return credits
+}
+
 export class AdbError extends Error {
   constructor(
     readonly status: number,
@@ -222,12 +249,14 @@ export function adbClient(apiKey: string, fetchImpl: typeof fetch = fetch): AdbC
     async balance() {
       const res = await call('GET', '/subscriptions/balance')
       if (!res.ok) throw new AdbError(res.status, 'balance')
-      return res.status === 204 ? null : readCredits(await res.json().catch(() => null))
+      // An account that has never been topped up has no balance yet, and
+      // AeroDataBox answers with no body. That's zero credits, not unknown.
+      return (await readBalanceReply(res, 'balance')) ?? 0
     },
     async refill(credits) {
       const res = await call('POST', '/subscriptions/balance/refill', { credits })
       if (!res.ok) throw new AdbError(res.status, 'refill')
-      return res.status === 204 ? null : readCredits(await res.json().catch(() => null))
+      return readBalanceReply(res, 'refill')
     },
   }
 }
