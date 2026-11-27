@@ -159,6 +159,10 @@ describe('AeroDataBox pushes, without a database', () => {
     expect(describeLeg(unknown(), 'Expected', now, 'B61017')).toBe(
       'B6 1017 BOS to RDU: leaves 9:00 AM ET, lands 11:10 AM ET, arrival gate C11',
     )
+    // AeroDataBox says EnRoute but gives no runway time: no takeoff time is made up.
+    expect(describeLeg(pushed({ status: 'EnRoute' }), 'EnRoute', now, 'B61017')).toBe(
+      'B6 1017 BOS to RDU: in the air, landing about 11:10 AM ET, arrival gate C11',
+    )
     expect(describeLeg(pushed({ status: 'Canceled' }), 'Canceled', now, 'B61017')).toBe(
       'B6 1017 BOS to RDU: cancelled, arrival gate C11',
     )

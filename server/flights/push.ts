@@ -248,6 +248,9 @@ export function describeLeg(i: AdbFlightItem, status: string, now: Date, fallbac
   const route = [i.departure?.airport?.iata, i.arrival?.airport?.iata].filter(Boolean).join(' to ')
   const scheduledArrival = parseUtc(i.arrival?.scheduledTime?.utc)
   const departure = happenedAt(i.departure, now) ?? bestTime(i.departure)
+  // Only a runway time that has passed is a takeoff; anything else is an estimate.
+  const runway = parseUtc(i.departure?.runwayTime?.utc)
+  const tookOff = runway && runway.getTime() <= now.getTime() ? runway : null
   const arrival = bestTime(i.arrival)
   let what: string
   switch (status) {
@@ -267,7 +270,7 @@ export function describeLeg(i: AdbFlightItem, status: string, now: Date, fallbac
     case 'EnRoute':
     case 'Approaching':
       what = [
-        departure ? `took off ${clock(departure)}` : 'in the air',
+        tookOff ? `took off ${clock(tookOff)}` : 'in the air',
         arrival ? `landing about ${clock(arrival)}${lateness(arrival, scheduledArrival)}` : null,
       ]
         .filter(Boolean)
