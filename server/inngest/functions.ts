@@ -1,7 +1,7 @@
 import { and, eq, gte, isNull, lte, or, notInArray } from 'drizzle-orm'
 import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import { sendArrivalSummaries } from '../alerts/arrivals-summary.js'
-import { sendFlightAlerts } from '../alerts/flight-alerts.js'
+import { flightAlertNotice, sendFlightAlerts } from '../alerts/flight-alerts.js'
 import { companyManagers, greeting } from '../alerts/recipients.js'
 import { db } from '../db/client.js'
 import { flight } from '../db/schema.js'
@@ -198,8 +198,14 @@ export const applyFlightPushJob = inngest.createFunction(
         sendFlightAlerts(db(), { now: new Date(), origin: appOrigin(), simulated: false }),
       )
       // Its own step, after the emails: a push that fails never resends an email.
-      const notice = emailed.notice
-      if (notice) await step.run('push-alerts', () => pushToCompanyManagers(db(), notice))
+      // The alert is rebuilt from ids inside the step, so no names reach run history.
+      const { eventIds } = emailed
+      if (eventIds.length) {
+        await step.run('push-alerts', async () => {
+          const notice = await flightAlertNotice(db(), eventIds, false)
+          return notice ? pushToCompanyManagers(db(), notice) : null
+        })
+      }
     }
     for (const flightId of result.finished) {
       await step.run(`release-${flightId}`, () => releaseFlight(db(), api(), flightId))
@@ -301,9 +307,15 @@ export const flightAlertsJob = inngest.createFunction(
       })
     })
     // Its own step, after the emails: a push that fails never resends an email.
-    const notice = emailed.notice
-    const pushed = notice ? await step.run('push-alerts', () => pushToCompanyManagers(db(), notice)) : null
-    return { ...emailed, pushed }
+    // The alert is rebuilt from ids inside the step, so no names reach run history.
+    const { eventIds, ...counts } = emailed
+    const pushed = eventIds.length
+      ? await step.run('push-alerts', async () => {
+          const notice = await flightAlertNotice(db(), eventIds, flightProvider() === simulatedProvider)
+          return notice ? pushToCompanyManagers(db(), notice) : null
+        })
+      : null
+    return { ...counts, pushed }
   },
 )
 
