@@ -23,6 +23,7 @@ import {
   newToken,
   parseUtc,
   pickMatch,
+  statusName,
   subjectFor,
   toLiveState,
   type AdbClient,
@@ -121,6 +122,28 @@ describe('AeroDataBox pushes, without a database', () => {
       { ...spec, direction: 'departure', fromAirport: 'RDU', toAirport: 'BOS' },
     )
     expect(leaving.gate).toBe('A4')
+  })
+
+  it('reads the status whether AeroDataBox sends its name or its number', () => {
+    // Pushes send FlightStatus as a number: 9 for a flight that landed, 1 for one expected.
+    expect(statusName(9)).toBe('Arrived')
+    expect(statusName(1)).toBe('Expected')
+    expect(statusName(10)).toBe('Canceled')
+    expect(statusName('7')).toBe('Delayed')
+    expect(statusName(' Boarding ')).toBe('Boarding')
+    expect(statusName(99)).toBeNull()
+    expect(statusName(1.5)).toBeNull()
+    expect(statusName(null)).toBeNull()
+    expect(statusName({})).toBeNull()
+    const now = new Date('2033-02-01T15:00:00Z')
+    expect(effectiveStatus(pushed({ status: 9 }), now)).toBe('Arrived')
+    expect(effectiveStatus(pushed({ status: 1 }), now)).toBe('Expected')
+    // 0 is Unknown, so the times decide.
+    const flying = pushed({
+      status: 0,
+      departure: { ...pushed().departure, runwayTime: { utc: '2033-02-01 14:20Z' } },
+    })
+    expect(effectiveStatus(flying, now)).toBe('Departed')
   })
 
   it('works the status out from the times when AeroDataBox says Unknown', () => {
@@ -508,8 +531,11 @@ describe.skipIf(!url)('AeroDataBox pushes against Postgres', () => {
     )
     expect(otherLeg.testLines).toHaveLength(1)
     expect(otherLeg.testLines[0]).toContain('RDU to MCO')
-    const done = await applyPush(db, test.id, { flights: [pushed({ status: 'Arrived' })] }, new Date(Date.now() + 2000))
+    // Pushes send the status as a number; 9 is Arrived.
+    const done = await applyPush(db, test.id, { flights: [pushed({ status: 9 })] }, new Date(Date.now() + 2000))
     expect(done.testFinished).toBe(true)
+    expect(done.testLines.join(' ')).toContain('landed')
+    expect(done.testLines.join(' ')).not.toMatch(/unknown/i)
     expect(await endSubscription(db, api, test.id)).toBe(true)
     expect(await endSubscription(db, api, test.id)).toBe(false)
 
