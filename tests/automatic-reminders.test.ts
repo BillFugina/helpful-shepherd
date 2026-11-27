@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createDb, type Db } from '../server/db/client.js'
 import {
   auditEvent,
+  contract,
+  contractTemplate,
   engagement,
   person,
   production,
@@ -156,6 +158,7 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
   let liveProduction = ''
   let avery = ''
   let riley = ''
+  let templateId = ''
   const start = new Date()
 
   async function addUser(u: SessionUser, role: Role) {
@@ -205,6 +208,7 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
     await db.delete(uploadLink).where(inArray(uploadLink.engagementId, engs))
     await db.delete(engagement).where(inArray(engagement.productionId, prods))
     await db.delete(production).where(eq(production.seasonId, seasonId))
+    if (templateId) await db.delete(contractTemplate).where(eq(contractTemplate.id, templateId))
     await db.delete(season).where(eq(season.id, seasonId))
     if (people.length) await db.delete(person).where(inArray(person.id, people))
     await db.delete(user).where(inArray(user.id, [cm.id, finance.id]))
@@ -281,6 +285,35 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
       status: 'off',
     })
     await asCm().reminders.save({ paperworkDaysBefore: 14, contractDaysAfter: 7, digestOn: true })
+  })
+
+  it('a new contract threshold reports contracts that turned late under it, once', async () => {
+    const t = await asCm().contracts.templates.saveText({
+      name: `Auto rider ${tag}`,
+      contractType: 'sdc',
+      body: '# Rider\n{{employee.name}}',
+    })
+    templateId = t.id
+    const [tpl] = await db.select().from(contractTemplate).where(eq(contractTemplate.id, t.id))
+    // Sent long ago and never signed: already late under any threshold.
+    await db.insert(contract).values({
+      engagementId: avery,
+      templateId: t.id,
+      templateFamilyId: tpl!.familyId,
+      status: 'sent',
+      sentOn: '2026-01-05',
+      sentAt: new Date('2026-01-05T15:00:00Z'),
+      sentTo: 'them',
+    })
+    const mine = (c: Awaited<ReturnType<typeof loadDigest>>) => c.unsigned.find((u) => u.name === `Avery Auto ${tag}`)
+    const before = new Date()
+    expect(mine(await loadDigest(db, new Date(before.getTime() - 1), new Date(), 7))?.news).toBe(false)
+    await asCm().reminders.save({ paperworkDaysBefore: 14, contractDaysAfter: 3, digestOn: true })
+    expect(mine(await loadDigest(db, new Date(before.getTime() - 1), new Date(), 3))?.news).toBe(true)
+    // The same save again changes nothing, so it isn't news again.
+    const after = new Date()
+    await asCm().reminders.save({ paperworkDaysBefore: 14, contractDaysAfter: 3, digestOn: true })
+    expect(mine(await loadDigest(db, after, new Date(), 3))?.news).toBe(false)
   })
 
   it('shows what is coming up, worked out from the dates', async () => {

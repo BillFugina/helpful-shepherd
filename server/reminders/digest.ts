@@ -14,6 +14,8 @@ import { loadReminderSettings } from './settings.js'
 
 /** The audit record for a digest that went out. Its record id is the day, so a day gets one digest. */
 export const DIGEST_RECORD = 'daily_digest'
+/** Audit record type for a save of the reminder settings. */
+export const SETTINGS_RECORD = 'reminder_settings'
 /** A digest never looks back further than this, even after a long quiet spell. */
 export const MAX_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -128,12 +130,31 @@ export async function loadDigest(db: Db, since: Date, now: Date, contractDays: n
       .innerJoin(production, eq(production.id, engagement.productionId))
       .where(and(eq(contract.status, 'sent'), lte(contract.sentOn, addDays(today, -contractDays))))
       .orderBy(contract.sentOn, production.title, person.legalName)
+    // After the threshold changed, every late contract is news once: some
+    // turned late under the new setting before this window started.
+    const [changed] = rows.length
+      ? await db
+          .select({ id: auditEvent.id })
+          .from(auditEvent)
+          .where(
+            and(
+              eq(auditEvent.recordType, SETTINGS_RECORD),
+              gt(auditEvent.at, since),
+              lte(auditEvent.at, now),
+              sql`${auditEvent.detail}->>'contractDaysChanged' = 'true'`,
+            ),
+          )
+          .limit(1)
+      : []
     for (const r of rows) {
       if (!r.sentOn) continue
       const late = contractLateOn(r.sentOn, contractDays)!
       // News: it turned late in this window, or was marked sent (with an old date) in it.
       const turned = digestAt(late).getTime()
-      const news = (turned > since.getTime() && turned <= now.getTime()) || (r.sentAt?.getTime() ?? 0) > since.getTime()
+      const news =
+        Boolean(changed) ||
+        (turned > since.getTime() && turned <= now.getTime()) ||
+        (r.sentAt?.getTime() ?? 0) > since.getTime()
       const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.sentOn}T00:00:00Z`)) / DAY_MS)
       unsigned.push({
         production: r.title,

@@ -10,7 +10,7 @@ import { loadChecklists } from '../documents/service.js'
 import { deliveryMode, sendEmail } from '../email/send.js'
 import { appOrigin } from '../env.js'
 import { remindersReplan } from '../reminders/announce.js'
-import { digestEmail, loadDigest, MAX_LOOKBACK_MS, visibleTo } from '../reminders/digest.js'
+import { digestEmail, loadDigest, MAX_LOOKBACK_MS, SETTINGS_RECORD, visibleTo } from '../reminders/digest.js'
 import { contractLateOn, paperworkReminderAt } from '../reminders/schedule.js'
 import { loadReminderSettings } from '../reminders/settings.js'
 import { adminProcedure, router, staffProcedure } from '../trpc.js'
@@ -26,6 +26,14 @@ export const remindersRouter = router({
 
   /** Saves the settings and plans every reminder again with them. */
   save: adminProcedure.input(reminderSettingsInput).mutation(async ({ ctx, input }) => {
+    const [before] = await ctx.db
+      .select({ contractDaysAfter: reminderSettings.contractDaysAfter })
+      .from(reminderSettings)
+      .where(eq(reminderSettings.id, 1))
+      .limit(1)
+    // A first save or a new threshold can make contracts late that no digest has
+    // listed yet; the next digest reports every late contract once.
+    const contractDaysChanged = before?.contractDaysAfter !== input.contractDaysAfter
     await ctx.db
       .insert(reminderSettings)
       .values({ id: 1, ...input })
@@ -34,10 +42,10 @@ export const remindersRouter = router({
       actorId: ctx.user.id,
       actorEmail: ctx.user.email,
       action: 'update',
-      recordType: 'reminder_settings',
+      recordType: SETTINGS_RECORD,
       recordId: '1',
       fieldGroup: 'documents',
-      detail: { fields: Object.keys(input) },
+      detail: { fields: Object.keys(input), contractDaysChanged },
     })
     await remindersReplan()
     return { ok: true }

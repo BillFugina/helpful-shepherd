@@ -6,7 +6,7 @@ import { appOrigin } from '../env.js'
 import { digestWake, DIGEST_WAKE, PAPERWORK_PLAN, REMINDERS_REPLAN } from '../reminders/announce.js'
 import { digestSentFor, sendDailyDigest } from '../reminders/digest.js'
 import { remindProduction } from '../reminders/paperwork.js'
-import { contractLateOn, digestAt, paperworkReminderAt } from '../reminders/schedule.js'
+import { contractLateOn, digestAt, nextDigestDay, paperworkReminderAt } from '../reminders/schedule.js'
 import { loadReminderSettings } from '../reminders/settings.js'
 import { inngest } from './client.js'
 import { sleepInPieces } from './functions.js'
@@ -113,8 +113,10 @@ export const replanRemindersJob = inngest.createFunction(
           .where(and(eq(contract.status, 'sent')))
         for (const c of sent) {
           const late = c.sentOn ? contractLateOn(c.sentOn, settings.contractDaysAfter) : null
-          // Only mornings still to come; contracts already late were in an earlier digest.
-          if (late && digestAt(late).getTime() > now.getTime()) days.add(late)
+          if (!late) continue
+          // Turns late later: that morning's digest. Already late (a first save
+          // or a lower threshold): the next digest, which lists it as new.
+          days.add(digestAt(late).getTime() > now.getTime() ? late : nextDigestDay(now))
         }
       }
       return { productionIds: prods.map((p) => p.id), days: [...days] }
