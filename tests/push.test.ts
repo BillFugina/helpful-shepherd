@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { eq, inArray } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createDb, type Db } from '../server/db/client.js'
 import {
   engagement,
@@ -150,6 +150,29 @@ describe('AeroDataBox pushes, without a database', () => {
     const failing = adbClient('secret-key', (async () => new Response('nope', { status: 401 })) as typeof fetch)
     await expect(failing.subscribe('B61017', 'u')).rejects.toThrow('HTTP 401')
     await expect(failing.subscribe('B61017', 'u')).rejects.not.toThrow('secret-key')
+  })
+
+  it('counts an empty balance reply as zero, and an unreadable one as an error', async () => {
+    const reply = (res: () => Response) => adbClient('k', (async () => res()) as typeof fetch)
+    expect(await reply(() => new Response(null, { status: 204 })).balance()).toBe(0)
+    expect(await reply(() => new Response('', { status: 200 })).balance()).toBe(0)
+    expect(await reply(() => new Response(null, { status: 204 })).refill(50)).toBeNull()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(reply(() => Response.json({ odd: 1 })).balance()).rejects.toThrow('unreadable reply')
+    expect(await reply(() => Response.json({ odd: 1 })).refill(50)).toBeNull()
+    expect(String(warn.mock.calls[0]?.[0])).toContain('keys: odd')
+    const broken = () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.error(new Error('cut off'))
+          },
+        }),
+        { status: 200 },
+      )
+    await expect(reply(broken).balance()).rejects.toThrow('body could not be read')
+    expect(await reply(broken).refill(50)).toBeNull()
+    warn.mockRestore()
   })
 
   it('reads the credit count whatever the balance reply calls it', () => {
