@@ -526,6 +526,13 @@ function AlertCredits() {
         )}
         {n === 0 ? <span className="error"> AeroDataBox sends no updates until you add more.</span> : null}
       </p>
+      {credits.data.auto ? (
+        <p className="muted small">
+          {credits.data.auto.on
+            ? `Automatic top-up: below ${credits.data.auto.below} credits, adds ${credits.data.auto.amount}, up to ${credits.data.auto.monthlyMax.toLocaleString()} a month (${credits.data.auto.usedThisMonth.toLocaleString()} added this month).`
+            : 'Automatic top-up is off.'}
+        </p>
+      ) : null}
       {confirming ? (
         <div className="actions">
           <span className="small">

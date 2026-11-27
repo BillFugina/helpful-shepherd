@@ -176,10 +176,20 @@ something happens:
   their flight in, car pickup, and the place and room name where they sleep.
   Never an address, door code or how to get in, and no phone numbers or
   booking codes in any email. A production gets one summary per day, even if
-  the job runs twice. This and the catch-up are the only scheduled runs:
-  once a day.
-- **Credits.** Each flight in a push costs one AeroDataBox credit. When a
-  push says fewer than 25 are left, Company Managers get one warning a day.
+  the job runs twice. This, the catch-up and the credit check are the only
+  scheduled runs: once a day each.
+- **Credits.** Each flight in a push costs one AeroDataBox credit, and at
+  zero AeroDataBox sends nothing. Credits are bought with API units from the
+  AeroDataBox plan (1 credit = 1 unit). The app tops them up on its own: when
+  the balance is below `AERODATABOX_TOP_UP_BELOW` (default 100) it adds
+  `AERODATABOX_TOP_UP_AMOUNT` (default 500), at most
+  `AERODATABOX_TOP_UP_MONTHLY_MAX` (default 10,000) a month, theatre time.
+  0 for the amount or the cap turns it off. It checks daily at 7 AM, before a
+  booked flight is watched, when a staff test starts, and when a push shows
+  the balance is low. Each automatic top-up is in the audit log. If the
+  balance is still under 25 afterwards, Company Managers get one warning a
+  day. Staff can also top up by hand (50, 100 or 500 credits) on the Arrivals
+  page, where the balance is shown.
 
 Emails go to Company Manager logins that have finished two-factor setup,
 through the same email settings as reminders, so in allowlist mode only

@@ -195,7 +195,12 @@ describe.skipIf(!url)('against Postgres', () => {
     })
     try {
       const asCm = createCaller({ db, user: cm })
-      expect(await asCm.arrivals.alertCredits()).toEqual({ available: true, credits: 0, error: false })
+      expect(await asCm.arrivals.alertCredits()).toMatchObject({
+        available: true,
+        credits: 0,
+        error: false,
+        auto: { below: 100, amount: 500, monthlyMax: 10_000, on: true },
+      })
       expect(await asCm.arrivals.topUpCredits({ credits: 100 })).toEqual({ credits: 100 })
       expect(sent.at(-1)).toEqual({
         url: 'https://api.aerodatabox.com/subscriptions/balance/refill',
@@ -218,7 +223,7 @@ describe.skipIf(!url)('against Postgres', () => {
       // A refused top-up says why it might have failed.
       fetchSpy.mockImplementation(async () => new Response('no', { status: 400 }))
       await expect(asCm.arrivals.topUpCredits({ credits: 50 })).rejects.toMatchObject({ code: 'BAD_GATEWAY' })
-      expect(await asCm.arrivals.alertCredits()).toEqual({ available: true, credits: null, error: true })
+      expect(await asCm.arrivals.alertCredits()).toMatchObject({ available: true, credits: null, error: true })
     } finally {
       fetchSpy.mockRestore()
       vi.unstubAllEnvs()

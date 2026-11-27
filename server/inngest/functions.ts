@@ -8,6 +8,7 @@ import { flight } from '../db/schema.js'
 import { sendEmail } from '../email/send.js'
 import { appOrigin } from '../env.js'
 import type { AdbNotification } from '../flights/aerodatabox.js'
+import { autoTopUp, topUpSettings } from '../flights/credits.js'
 import { flightProvider, pushFeedOn, simulatedProvider } from '../flights/provider.js'
 import {
   adbFromEnv,
@@ -25,8 +26,8 @@ import { inngest } from './client.js'
 
 // Nothing here polls. Booked flights are watched only from 3 hours before
 // take-off until they land (AeroDataBox pushes the changes), and the alert
-// email goes out when a change is logged. The only schedule left is the
-// 6 PM "arriving tomorrow" email.
+// email goes out when a change is logged. The schedules left are the 6 PM
+// "arriving tomorrow" email (with the catch-up) and the 7 AM credit check.
 
 /** 6 PM theatre time, for the next day's arrivals. */
 export const SUMMARY_CRON = 'TZ=America/New_York 0 18 * * *'
@@ -95,6 +96,8 @@ export const watchFlightJob = inngest.createFunction(
     if (!plan) return { watched: false }
 
     await sleepInPieces(step, 'until-take-off', event.ts ?? plan.watchFrom, new Date(plan.watchFrom))
+    // Make sure there are credits, or AeroDataBox would send this flight nothing.
+    await step.sendEvent('credits-check', { name: CREDITS_CHECK, data: {} })
     const subscriptionId = await step.run('subscribe', () => watchFlight(db(), api(), flightId, appOrigin()))
     if (!subscriptionId) return { watched: false }
 
@@ -221,7 +224,47 @@ export const applyFlightPushJob = inngest.createFunction(
     if (result.testFinished) {
       await step.run('end-test', () => endSubscription(db(), api(), subscriptionId))
     }
-    if (result.credits !== null && result.credits < LOW_CREDITS) {
+    if (result.credits !== null && result.credits < Math.max(topUpSettings().below, LOW_CREDITS)) {
+      // Top up if allowed; that job warns if the balance stays low.
+      await step.sendEvent('credits-check', { name: CREDITS_CHECK, data: {} })
+    }
+    return { stored: result.stored, events: result.events, finished: result.finished.length }
+  },
+)
+
+/** Ask the top-up job to check the balance. */
+export const CREDITS_CHECK = 'app/credits.check'
+/** 7 AM theatre time: the daily balance check. */
+export const CREDITS_CRON = 'TZ=America/New_York 0 7 * * *'
+
+/**
+ * Keeps AeroDataBox's alert credits from running out: below the threshold it
+ * adds credits, up to the monthly cap (see server/flights/credits.ts). Runs
+ * daily, before a booked flight is watched, when a staff test starts, and
+ * when an update shows the balance is low. One at a time, so the cap holds.
+ * If the balance is still low afterwards (cap reached, or top-up off or
+ * refused), the Company Managers get the low-credit warning.
+ */
+export const topUpCreditsJob = inngest.createFunction(
+  {
+    id: 'top-up-credits',
+    name: 'Top up flight alert credits',
+    triggers: [{ cron: CREDITS_CRON }, { event: CREDITS_CHECK }],
+    concurrency: 1,
+  },
+  async ({ step }) => {
+    const result = await step.run('top-up', async () => {
+      const client = adbFromEnv()
+      if (!client) return null
+      try {
+        return await autoTopUp(db(), client, new Date())
+      } catch (error) {
+        console.error('Automatic credit top-up failed', error)
+        // Still warn below if the balance is low.
+        return { action: 'failed' as const, credits: await client.balance().catch(() => null) }
+      }
+    })
+    if (result && result.credits !== null && result.credits < LOW_CREDITS) {
       // The event id makes this at most one warning a day.
       await step.sendEvent('credits-low', {
         id: `credits-low-${localDate(new Date(), THEATRE_TZ)}`,
@@ -229,7 +272,7 @@ export const applyFlightPushJob = inngest.createFunction(
         data: { credits: result.credits },
       })
     }
-    return { stored: result.stored, events: result.events, finished: result.finished.length }
+    return result
   },
 )
 
@@ -245,6 +288,8 @@ export const lowCreditsJob = inngest.createFunction(
           greeting(r.name),
           '',
           `Live flight alerts have ${credits} credits left. Each flight update costs one credit. When they run out, AeroDataBox stops sending updates until the balance is topped up.`,
+          '',
+          `Automatic top-up couldn't add more this time: it may have reached its monthly limit, be turned off, or have been refused by AeroDataBox. You can add credits at the bottom of the Arrivals page: ${appOrigin()}/arrivals`,
           '',
           'Sent by the theatre app.',
         ].join('\n')
@@ -309,6 +354,7 @@ export const functions = [
   releaseRemovedFlightJob,
   applyFlightPushJob,
   lowCreditsJob,
+  topUpCreditsJob,
   endFlightTestJob,
   flightAlertsJob,
   arrivalSummaryJob,

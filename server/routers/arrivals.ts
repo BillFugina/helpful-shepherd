@@ -16,7 +16,8 @@ import {
   production,
   rentalCar,
 } from '../db/schema.js'
-import { flightsChanged, testStarted } from '../flights/announce.js'
+import { creditsCheck, flightsChanged, testStarted } from '../flights/announce.js'
+import { autoTopUpsThisMonth, topUpOn, topUpSettings } from '../flights/credits.js'
 import { flightProvider } from '../flights/provider.js'
 import { adbFromEnv, endSubscription, listTests, startTest } from '../flights/push.js'
 import { replayFlight } from '../flights/replay.js'
@@ -377,6 +378,7 @@ export const arrivalsRouter = router({
           message: 'Live flight tests need Inngest, which could not be reached. Nothing was started.',
         })
       }
+      await creditsCheck()
       await auditChange(ctx.db, ctx.user, {
         action: 'create',
         recordType: 'flight_test',
@@ -396,12 +398,18 @@ export const arrivalsRouter = router({
   alertCredits: adminProcedure.query(async ({ ctx }) => {
     requireView(ctx.grants, 'travel_logistics')
     const api = adbFromEnv()
-    if (!api) return { available: false as const, credits: null, error: false }
+    if (!api) return { available: false as const, credits: null, error: false, auto: null }
+    const settings = topUpSettings()
+    const auto = {
+      ...settings,
+      on: topUpOn(settings),
+      usedThisMonth: await autoTopUpsThisMonth(ctx.db, new Date()),
+    }
     try {
-      return { available: true as const, credits: await api.balance(), error: false }
+      return { available: true as const, credits: await api.balance(), error: false, auto }
     } catch (error) {
       console.error('Could not read the AeroDataBox credit balance', error)
-      return { available: true as const, credits: null, error: true }
+      return { available: true as const, credits: null, error: true, auto }
     }
   }),
 

@@ -25,6 +25,11 @@ const schema = z.object({
   // AeroDataBox (bought directly), for live flight updates pushed to
   // /api/flight-push. With a key, staff can run a live test on any real flight.
   AERODATABOX_API_KEY: z.string().optional(),
+  // Automatic credit top-up (server/flights/credits.ts): whole numbers, read
+  // there with defaults 100, 500 and 10000. 0 for the amount or cap turns it off.
+  AERODATABOX_TOP_UP_BELOW: z.string().optional(),
+  AERODATABOX_TOP_UP_AMOUNT: z.string().optional(),
+  AERODATABOX_TOP_UP_MONTHLY_MAX: z.string().optional(),
   // simulated (default): the demo feed. aerodatabox: booked flights are watched
   // by AeroDataBox from 3 hours before take-off until they land.
   FLIGHT_FEED: z.enum(['simulated', 'aerodatabox']).optional(),

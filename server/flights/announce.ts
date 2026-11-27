@@ -41,3 +41,9 @@ export async function testStarted(subscriptionId: string): Promise<boolean> {
   if (!inngestEnabled()) return false
   return send([{ name: 'app/flight-test.started', data: { subscriptionId } }])
 }
+
+/** Ask the top-up job to check AeroDataBox's alert credits. Best effort. */
+export async function creditsCheck(): Promise<void> {
+  if (!inngestEnabled()) return
+  await send([{ name: 'app/credits.check', data: {} }])
+}
