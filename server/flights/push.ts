@@ -6,6 +6,7 @@ import {
   bestTime,
   canonNumber,
   effectiveStatus,
+  statusName,
   happenedAt,
   hashToken,
   isFinal,
@@ -370,7 +371,7 @@ export async function applyPush(
         detail: {
           summary: short(i.notificationSummary),
           remark: short(i.notificationRemark),
-          rawStatus: short(i.status, 40),
+          rawStatus: short(statusName(i.status), 40),
           expectedArrival: expectedArrival?.toISOString() ?? null,
           departure: movement(i.departure),
           arrival: movement(i.arrival),

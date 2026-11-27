@@ -29,7 +29,8 @@ export interface AdbMovement {
 /** One flight in a push (FlightNotificationItemContract). Only the fields the app reads. */
 export interface AdbFlightItem {
   number?: string | null
-  status?: string | null
+  /** A name like "Arrived" from the REST API, but a number (FlightStatus enum) in pushes. */
+  status?: string | number | null
   notificationSummary?: string | null
   notificationRemark?: string | null
   lastUpdatedUtc?: string | null
@@ -93,11 +94,40 @@ export function happenedAt(m: AdbMovement | null | undefined, now: Date): Date |
 }
 
 /**
+ * AeroDataBox's FlightStatus enum, in order. Pushes send the number (9 for a
+ * flight that has landed, 1 for one still expected), the REST API the name.
+ */
+const FLIGHT_STATUSES = [
+  'Unknown',
+  'Expected',
+  'EnRoute',
+  'CheckIn',
+  'Boarding',
+  'GateClosed',
+  'Departed',
+  'Delayed',
+  'Approaching',
+  'Arrived',
+  'Canceled',
+  'Diverted',
+  'CanceledUncertain',
+] as const
+
+/** The status as a name, whether the feed sent a name or the enum's number. Null when it sent neither. */
+export function statusName(raw: unknown): string | null {
+  if (typeof raw === 'number') return Number.isInteger(raw) ? (FLIGHT_STATUSES[raw] ?? null) : null
+  if (typeof raw !== 'string') return null
+  const t = raw.trim()
+  if (/^\d+$/.test(t)) return FLIGHT_STATUSES[Number(t)] ?? null
+  return t || null
+}
+
+/**
  * The flight's status. AeroDataBox often sends "Unknown" even for flights in
  * the air or on the ground, so in that case it is worked out from the times.
  */
 export function effectiveStatus(item: AdbFlightItem, now: Date): string {
-  const raw = item.status?.trim()
+  const raw = statusName(item.status)
   if (raw && raw !== 'Unknown') return raw
   if (happenedAt(item.arrival, now)) return 'Arrived'
   if (happenedAt(item.departure, now)) return 'Departed'
