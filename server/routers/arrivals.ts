@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gte, inArray, lt, or } from 'drizzle-orm'
 import { z } from 'zod'
 import { levelAtLeast, levelFor, type FieldGroup, type Grants } from '../../shared/access.js'
 import { addDays, dayBounds, localDate, THEATRE_TZ } from '../../shared/time.js'
-import { boardInput, setClockInput } from '../../shared/travel.js'
+import { boardInput, setClockInput, TOP_UP_CREDITS } from '../../shared/travel.js'
 import type { Db } from '../db/client.js'
 import {
   engagement,
@@ -386,6 +386,53 @@ export const arrivalsRouter = router({
         detail: { flightNumber: sub.flightNumber },
       })
       return { id: sub.id }
+    }),
+
+  /**
+   * AeroDataBox's alert credit balance, shared by every flight it watches. At
+   * zero it stops sending updates, so staff can see it and top it up here.
+   * Reading it is free.
+   */
+  alertCredits: adminProcedure.query(async ({ ctx }) => {
+    requireView(ctx.grants, 'travel_logistics')
+    const api = adbFromEnv()
+    if (!api) return { available: false as const, credits: null, error: false }
+    try {
+      return { available: true as const, credits: await api.balance(), error: false }
+    } catch (error) {
+      console.error('Could not read the AeroDataBox credit balance', error)
+      return { available: true as const, credits: null, error: true }
+    }
+  }),
+
+  /** Adds alert credits. Each credit uses one API unit from the AeroDataBox plan. */
+  topUpCredits: adminProcedure
+    .input(z.object({ credits: z.literal(TOP_UP_CREDITS) }))
+    .mutation(async ({ ctx, input }) => {
+      requireEdit(ctx.grants, ['travel_logistics'])
+      const api = adbFromEnv()
+      if (!api) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No AeroDataBox key is set.' })
+      let credits: number | null
+      try {
+        credits = await api.refill(input.credits)
+      } catch (error) {
+        console.error('AeroDataBox refused the credit top-up', error)
+        throw new TRPCError({
+          code: 'BAD_GATEWAY',
+          message:
+            'AeroDataBox refused the top-up. Your plan may not have enough API units, or may cap how many credits you can add or hold.',
+        })
+      }
+      await auditChange(ctx.db, ctx.user, {
+        action: 'update',
+        recordType: 'flight_credits',
+        recordId: 'aerodatabox',
+        keys: [],
+        fields: {},
+        detail: { added: input.credits },
+      })
+      if (credits === null) credits = await api.balance().catch(() => null)
+      return { credits }
     }),
 
   stopLiveTest: adminProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {

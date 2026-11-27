@@ -15,6 +15,7 @@ import {
 } from '../server/db/schema.js'
 import {
   adbClient,
+  readCredits,
   canonNumber,
   hashToken,
   matchesFlight,
@@ -125,7 +126,7 @@ describe('AeroDataBox pushes, without a database', () => {
     const fake = (async (url: string, init: RequestInit) => {
       calls.push({ url, init })
       if (init.method === 'DELETE') return new Response('', { status: 404 })
-      if (url.endsWith('/subscriptions/balance')) return Response.json({ creditsRemaining: 412 })
+      if (url.includes('/subscriptions/balance')) return Response.json({ creditsRemaining: 412 })
       return Response.json({ id: 'sub-1', isActive: true })
     }) as typeof fetch
     const api = adbClient('secret-key', fake)
@@ -138,9 +139,25 @@ describe('AeroDataBox pushes, without a database', () => {
     })
     await expect(api.unsubscribe('gone')).resolves.toBeUndefined()
     expect(await api.balance()).toBe(412)
+    calls.length = 0
+    expect(await api.refill(100)).toBe(412)
+    expect(calls[0]!.url).toBe('https://api.aerodatabox.com/subscriptions/balance/refill')
+    expect(calls[0]!.init.method).toBe('POST')
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ credits: 100 })
+    await expect(
+      adbClient('secret-key', (async () => new Response('no', { status: 401 })) as typeof fetch).refill(100),
+    ).rejects.toThrow('HTTP 401')
     const failing = adbClient('secret-key', (async () => new Response('nope', { status: 401 })) as typeof fetch)
     await expect(failing.subscribe('B61017', 'u')).rejects.toThrow('HTTP 401')
     await expect(failing.subscribe('B61017', 'u')).rejects.not.toThrow('secret-key')
+  })
+
+  it('reads the credit count whatever the balance reply calls it', () => {
+    expect(readCredits({ creditsRemaining: 7 })).toBe(7)
+    expect(readCredits({ credits: 0 })).toBe(0)
+    expect(readCredits({ balance: 12 })).toBe(12)
+    expect(readCredits({ something: 'else' })).toBeNull()
+    expect(readCredits(null)).toBeNull()
   })
 
   it('the push endpoint turns away bad tokens, and needs Inngest', async () => {
@@ -195,6 +212,7 @@ function fakeApi() {
     },
     unsubscribe: async (id) => void live.delete(id),
     balance: async () => 100,
+    refill: async (credits) => 100 + credits,
   }
   return { api, live, created: () => n }
 }
