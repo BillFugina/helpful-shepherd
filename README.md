@@ -286,6 +286,24 @@ guest.
   guest sessions, expired ones cleaned up, and guest sign-ins kept out of the
   audit log. Set `DEMO_GUEST=off` to turn it off.
 
+## Emailing contracts
+
+From a draft contract, **Email contract** sends the filled PDF to the person,
+copying their agent (a box, on by default, when the deal has an agent with an
+address), with replies going to the Company Manager who sent it. It's refused
+while a required field is blank or the person has no address. The contract is
+marked sent and the deal moves to Contract sent only once the email service
+takes the email, in the same transaction, so a failed send leaves a draft; a
+retry of the same email carries the same idempotency key, so Resend sends it
+once. The digest booking for an unsigned contract happens just as it does for
+Mark sent. Signed copies come back by reply and are marked signed by hand.
+
+It uses the same email settings as reminders: when email is off, or the
+person's address isn't allowed, nothing is written and the app hands back the
+email to send by hand (Mark sent is still there for that). An agent whose
+address isn't allowed is left off the copy and the page says so. The log
+records who it went to by kind (person, agent), never the address.
+
 ## Reminder emails
 
 The Company Manager can email a reminder to one person or everyone on a
