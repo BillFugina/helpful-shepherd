@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, gte, isNull, lte, or, notInArray } from 'drizzle-orm'
 import { addDays, localDate, THEATRE_TZ } from '../../shared/time.js'
 import { sendArrivalSummaries } from '../alerts/arrivals-summary.js'
 import { sendFlightAlerts } from '../alerts/flight-alerts.js'
@@ -101,8 +101,9 @@ export const watchFlightJob = inngest.createFunction(
     // Fallback: if no landing arrives, stop a while after the arrival. A late
     // flight moves that point out, up to three times.
     let until = plan.until
-    for (let round = 0; round < 3; round++) {
+    for (let round = 0; ; round++) {
       await sleepInPieces(step, `fallback-${round}`, plan.watchFrom, new Date(until))
+      if (round === 3) break
       const later = await step.run(`check-${round}`, async () => {
         const [f] = await db().select().from(flight).where(eq(flight.id, flightId))
         if (!f?.pushSubscriptionId || finished(f.liveStatus)) return null
@@ -114,6 +115,53 @@ export const watchFlightJob = inngest.createFunction(
     }
     await step.run('release', () => releaseFlight(db(), api(), flightId))
     return { watched: true }
+  },
+)
+
+/** How far ahead the daily catch-up looks for flights nobody is watching yet. */
+export const CATCH_UP_AHEAD_MS = 48 * HOUR
+
+/**
+ * Starts a watch for upcoming flights that never got one: flights saved
+ * before the real feed was turned on, or whose save couldn't reach Inngest.
+ * Runs daily at 6 PM, and on demand with the app/flights.catch-up event (send
+ * it once after turning the real feed on). A flight that already has a watch
+ * waiting just gets a fresh one in its place.
+ */
+export const catchUpFlightsJob = inngest.createFunction(
+  {
+    id: 'catch-up-flights',
+    name: 'Watch upcoming flights that have no watch yet',
+    triggers: [{ cron: SUMMARY_CRON }, { event: 'app/flights.catch-up' }],
+    concurrency: 1,
+  },
+  async ({ step }) => {
+    const ids = await step.run('find', async () => {
+      if (!pushFeedOn()) return []
+      const now = Date.now()
+      const rows = await db()
+        .select({ id: flight.id })
+        .from(flight)
+        .where(
+          and(
+            isNull(flight.pushSubscriptionId),
+            // Still to come, or in the air now.
+            gte(flight.scheduledArrival, new Date(now - FALLBACK_AFTER_MS)),
+            lte(flight.scheduledDeparture, new Date(now + CATCH_UP_AHEAD_MS)),
+            or(isNull(flight.liveStatus), notInArray(flight.liveStatus, ['landed', 'cancelled'])),
+          ),
+        )
+      return rows.map((r) => r.id)
+    })
+    if (ids.length) {
+      const day = localDate(new Date(), THEATRE_TZ)
+      await step.sendEvent(
+        'watch',
+        // The id keeps a second run the same day from restarting the same watches.
+        ids.map((flightId) => ({ id: `catch-up-${flightId}-${day}`, name: 'app/flight.saved', data: { flightId } })),
+      )
+    }
+    return { queued: ids.length }
   },
 )
 
@@ -257,6 +305,7 @@ export const arrivalSummaryJob = inngest.createFunction(
 
 export const functions = [
   watchFlightJob,
+  catchUpFlightsJob,
   releaseRemovedFlightJob,
   applyFlightPushJob,
   lowCreditsJob,

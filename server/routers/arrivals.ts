@@ -21,6 +21,7 @@ import { flightProvider } from '../flights/provider.js'
 import { adbFromEnv, endSubscription, listTests, startTest } from '../flights/push.js'
 import { replayFlight } from '../flights/replay.js'
 import { clockOffsetMs, feedNow, setDemoClock, trackFlights } from '../flights/track.js'
+import { inngestEnabled } from '../inngest/client.js'
 import { shortName } from '../travel/records.js'
 import { appOrigin } from '../env.js'
 import { adminProcedure, router, staffProcedure } from '../trpc.js'
@@ -327,12 +328,13 @@ export const arrivalsRouter = router({
 
   /**
    * The staff live test: watch any real flight number for a few hours and see
-   * AeroDataBox's pushes arrive. Shown only when an AeroDataBox key is set.
+   * AeroDataBox's pushes arrive. Shown only when an AeroDataBox key is set
+   * and Inngest is on (pushes and the test's time limit both go through it).
    * Real flights only; it never touches the demo people.
    */
   liveTests: adminProcedure.query(async ({ ctx }) => {
     requireView(ctx.grants, 'travel_logistics')
-    if (!adbFromEnv()) return { available: false as const, tests: [] }
+    if (!adbFromEnv() || !inngestEnabled()) return { available: false as const, tests: [] }
     return { available: true as const, tests: await listTests(ctx.db) }
   }),
 
@@ -342,6 +344,9 @@ export const arrivalsRouter = router({
       requireEdit(ctx.grants, ['travel_logistics'])
       const api = adbFromEnv()
       if (!api) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No AeroDataBox key is set.' })
+      if (!inngestEnabled()) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Live flight tests need Inngest, which is off.' })
+      }
       let sub
       try {
         sub = await startTest(ctx.db, api, {

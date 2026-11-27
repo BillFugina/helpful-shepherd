@@ -163,6 +163,11 @@ something happens:
   delay, a gate change, a cancellation or a landing. A landing or
   cancellation removes the subscription; if neither arrives, it's removed 6
   hours after the latest known arrival. Removing the flight removes it too.
+- **Catch-up** (`FLIGHT_FEED=aerodatabox` only), daily at 6 PM: starts a
+  watch for any flight in the next 48 hours that has none, such as flights
+  saved before the real feed was turned on. After turning the feed on, send
+  the `app/flights.catch-up` event once from the Inngest dashboard to run it
+  right away.
 - **Alert emails with the simulated feed.** The board logs changes when it's
   opened, and sends one event to email them. Changes more than six hours old
   (in the feed's time) are marked done without an email.
@@ -171,7 +176,8 @@ something happens:
   their flight in, car pickup, and the place and room name where they sleep.
   Never an address, door code or how to get in, and no phone numbers or
   booking codes in any email. A production gets one summary per day, even if
-  the job runs twice. This is the one scheduled run left: once a day.
+  the job runs twice. This and the catch-up are the only scheduled runs:
+  once a day.
 - **Credits.** Each flight in a push costs one AeroDataBox credit. When a
   push says fewer than 25 are left, Company Managers get one warning a day.
 
@@ -189,7 +195,7 @@ and run `npx inngest-cli@latest dev -u http://localhost:3001/api/inngest`.
 ### Live flight test (AeroDataBox)
 
 With `AERODATABOX_API_KEY` set (from AeroDataBox directly, sent as
-`X-Api-Key`), Company Managers see **Watch a real flight (test)** at the
+`X-Api-Key`) and Inngest on, Company Managers see **Watch a real flight (test)** at the
 bottom of the Arrivals page. Enter any real flight number flying in the next
 few hours: the app subscribes right away, lists each update as it arrives
 (flight data only), and emails the person who started it when the status
