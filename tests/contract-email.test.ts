@@ -16,6 +16,7 @@ import {
   userRole,
 } from '../server/db/schema.js'
 import { sendEmail } from '../server/email/send.js'
+import { contractSent } from '../server/reminders/announce.js'
 import { resetEnvForTests, type Env } from '../server/env.js'
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
@@ -86,6 +87,24 @@ describe('contract email', () => {
     expect(calls[0]!.body.cc).toEqual(['b@real.org'])
     expect(calls[0]!.body.attachments).toEqual([{ filename: 'c .pdf', content: 'QUJD' }])
     expect(calls[0]!.headers['Idempotency-Key']).toBe('k1')
+  })
+})
+
+describe('booking the digest after a send', () => {
+  it('never fails a send that already went out', async () => {
+    vi.stubEnv('INNGEST_SIGNING_KEY', 'signkey-test-00')
+    const broken = {
+      select: () => {
+        throw new Error('database down')
+      },
+    } as unknown as Db
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(contractSent(broken, '2031-01-05')).resolves.toBeUndefined()
+    } finally {
+      quiet.mockRestore()
+      vi.unstubAllEnvs()
+    }
   })
 })
 
