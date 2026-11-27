@@ -4,11 +4,13 @@ import { pushFeedOn } from './provider.js'
 // Tells Inngest about flight changes after the database write has committed.
 // Best effort: a failure is logged and never fails the save.
 
-async function send(events: { name: string; data: Record<string, unknown> }[]): Promise<void> {
+async function send(events: { name: string; data: Record<string, unknown> }[]): Promise<boolean> {
   try {
     await inngest.send(events)
+    return true
   } catch (error) {
     console.error('could not tell Inngest about a flight change', error)
+    return false
   }
 }
 
@@ -30,8 +32,12 @@ export async function flightsChanged(): Promise<void> {
   await send([{ name: 'app/flights.changed', data: {} }])
 }
 
-/** A staff flight test started: end it after a while even if the flight never lands. */
-export async function testStarted(subscriptionId: string): Promise<void> {
-  if (!inngestEnabled()) return
-  await send([{ name: 'app/flight-test.started', data: { subscriptionId } }])
+/**
+ * A staff flight test started: end it after a while even if the flight never
+ * lands. Returns false if Inngest couldn't take the event (off, or no event
+ * key), so the caller can end the test rather than leave it running.
+ */
+export async function testStarted(subscriptionId: string): Promise<boolean> {
+  if (!inngestEnabled()) return false
+  return send([{ name: 'app/flight-test.started', data: { subscriptionId } }])
 }

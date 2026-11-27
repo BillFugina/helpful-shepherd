@@ -358,7 +358,14 @@ export const arrivalsRouter = router({
         const message = error instanceof Error ? error.message : 'Could not start the test.'
         throw new TRPCError({ code: 'BAD_REQUEST', message })
       }
-      await testStarted(sub.id)
+      if (!(await testStarted(sub.id))) {
+        // Without Inngest the test would get no updates and never end on its own.
+        await endSubscription(ctx.db, api, sub.id)
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Live flight tests need Inngest, which could not be reached. Nothing was started.',
+        })
+      }
       await auditChange(ctx.db, ctx.user, {
         action: 'create',
         recordType: 'flight_test',
