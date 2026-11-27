@@ -3,6 +3,10 @@ import type { Db } from '../db/client.js'
 import { flight, flightPush, flightSubscription, user } from '../db/schema.js'
 import {
   adbClient,
+  bestTime,
+  canonNumber,
+  effectiveStatus,
+  happenedAt,
   hashToken,
   isFinal,
   newToken,
@@ -219,6 +223,75 @@ const movement = (m: AdbMovement | null | undefined) => ({
 
 const short = (v: unknown, max = 200) => (typeof v === 'string' ? v.slice(0, max) : null)
 
+const THEATRE_TZ = 'America/New_York'
+const clock = (d: Date) =>
+  `${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: THEATRE_TZ })} ET`
+
+/** "18 min late" or "6 min early" against the schedule; nothing within 5 minutes. */
+function lateness(actual: Date | null, scheduled: Date | null): string {
+  if (!actual || !scheduled) return ''
+  const min = Math.round((actual.getTime() - scheduled.getTime()) / 60_000)
+  if (Math.abs(min) < 5) return ''
+  return min > 0 ? ` (${min} min late)` : ` (${-min} min early)`
+}
+
+/** One leg of a flight in a pushed update. The same number can fly several legs a day. */
+const legKey = (i: { number: string; from: string | null; to: string | null; scheduled: Date | null }) =>
+  [canonNumber(i.number), i.from ?? '', i.to ?? '', i.scheduled?.toISOString() ?? ''].join('|')
+
+/**
+ * A pushed flight as one line a person can read: where it is, its times in
+ * theatre time, how late it is, and the arrival gate and bag belt when known.
+ */
+export function describeLeg(i: AdbFlightItem, status: string, now: Date, fallbackNumber: string): string {
+  const number = short(i.number, 20) ?? fallbackNumber
+  const route = [i.departure?.airport?.iata, i.arrival?.airport?.iata].filter(Boolean).join(' to ')
+  const scheduledArrival = parseUtc(i.arrival?.scheduledTime?.utc)
+  const departure = happenedAt(i.departure, now) ?? bestTime(i.departure)
+  const arrival = bestTime(i.arrival)
+  let what: string
+  switch (status) {
+    case 'Canceled':
+    case 'CanceledUncertain':
+      what = 'cancelled'
+      break
+    case 'Diverted':
+      what = 'diverted'
+      break
+    case 'Arrived': {
+      const landed = happenedAt(i.arrival, now) ?? arrival
+      what = landed ? `landed ${clock(landed)}${lateness(landed, scheduledArrival)}` : 'landed'
+      break
+    }
+    case 'Departed':
+    case 'EnRoute':
+    case 'Approaching':
+      what = [
+        departure ? `took off ${clock(departure)}` : 'in the air',
+        arrival ? `landing about ${clock(arrival)}${lateness(arrival, scheduledArrival)}` : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      break
+    default:
+      what = [
+        status === 'Delayed' ? 'delayed' : null,
+        departure ? `leaves ${clock(departure)}` : null,
+        arrival ? `lands ${clock(arrival)}${lateness(arrival, scheduledArrival)}` : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      if (!what) what = 'no times yet'
+  }
+  const gate = short(i.arrival?.gate, 10)
+  const belt = status === 'Arrived' ? short(i.arrival?.baggageBelt, 10) : null
+  const extras = [gate ? `arrival gate ${gate}` : null, belt ? `bags at belt ${belt}` : null].filter(Boolean)
+  const summary = short(i.notificationSummary)
+  return `${number}${route ? ` ${route}` : ''}: ${what}${extras.length ? `, ${extras.join(', ')}` : ''}${
+    summary ? `. ${summary}` : ''
+  }`
+}
+
 export interface PushResult {
   purpose: 'flight' | 'test' | null
   stored: number
@@ -260,25 +333,43 @@ export async function applyPush(
   const items: AdbFlightItem[] = Array.isArray(payload.flights) ? payload.flights.slice(0, 50) : []
   const credits = typeof payload.balance?.creditsRemaining === 'number' ? payload.balance.creditsRemaining : null
 
-  const [previous] = await db
-    .select({ status: flightPush.status })
+  // What each leg looked like in the last update, to tell what changed.
+  const earlier = await db
+    .select()
     .from(flightPush)
     .where(eq(flightPush.subscriptionId, sub.id))
     .orderBy(desc(flightPush.receivedAt))
-    .limit(1)
-  if (items.length) {
+    .limit(50)
+  const lastSeen = new Map<string, { status: string; expectedArrival: number | null }>()
+  for (const p of earlier) {
+    const key = legKey({ number: p.number, from: p.fromAirport, to: p.toAirport, scheduled: p.scheduledDeparture })
+    if (lastSeen.has(key)) continue
+    const expected = typeof p.detail?.expectedArrival === 'string' ? parseUtc(p.detail.expectedArrival) : null
+    lastSeen.set(key, { status: p.status, expectedArrival: expected?.getTime() ?? null })
+  }
+  const rows = items.map((i) => ({
+    item: i,
+    status: effectiveStatus(i, now),
+    expectedArrival: bestTime(i.arrival),
+    row: {
+      subscriptionId: sub.id,
+      receivedAt: now,
+      number: short(i.number, 20) ?? '?',
+      status: short(effectiveStatus(i, now), 40) ?? 'Expected',
+      fromAirport: short(i.departure?.airport?.iata, 4),
+      toAirport: short(i.arrival?.airport?.iata, 4),
+      scheduledDeparture: parseUtc(i.departure?.scheduledTime?.utc),
+    },
+  }))
+  if (rows.length) {
     await db.insert(flightPush).values(
-      items.map((i) => ({
-        subscriptionId: sub.id,
-        receivedAt: now,
-        number: short(i.number, 20) ?? '?',
-        status: short(i.status, 40) ?? 'Unknown',
-        fromAirport: short(i.departure?.airport?.iata, 4),
-        toAirport: short(i.arrival?.airport?.iata, 4),
-        scheduledDeparture: parseUtc(i.departure?.scheduledTime?.utc),
+      rows.map(({ item: i, expectedArrival, row }) => ({
+        ...row,
         detail: {
           summary: short(i.notificationSummary),
           remark: short(i.notificationRemark),
+          rawStatus: short(i.status, 40),
+          expectedArrival: expectedArrival?.toISOString() ?? null,
           departure: movement(i.departure),
           arrival: movement(i.arrival),
         },
@@ -299,19 +390,26 @@ export async function applyPush(
   }
 
   if (sub.purpose === 'test') {
-    let last = previous?.status ?? null
-    for (const i of items) {
-      if (i.status && i.status !== last) {
-        const route = [i.departure?.airport?.iata, i.arrival?.airport?.iata].filter(Boolean).join(' to ')
-        result.testLines.push(
-          `${i.number ?? sub.flightNumber}${route ? ` (${route})` : ''}: ${i.status}${
-            i.notificationSummary ? `. ${short(i.notificationSummary)}` : ''
-          }`,
-        )
-        last = i.status
+    // A line for each leg that is new, changed status, or moved its arrival by 5 minutes or more.
+    for (const { item: i, status, expectedArrival, row } of rows) {
+      const key = legKey({
+        number: row.number,
+        from: row.fromAirport,
+        to: row.toAirport,
+        scheduled: row.scheduledDeparture,
+      })
+      const before = lastSeen.get(key)
+      const moved =
+        !!before &&
+        before.expectedArrival !== null &&
+        expectedArrival !== null &&
+        Math.abs(before.expectedArrival - expectedArrival.getTime()) >= 5 * 60_000
+      if (!before || before.status !== status || moved) {
+        result.testLines.push(describeLeg(i, status, now, sub.flightNumber))
       }
+      lastSeen.set(key, { status, expectedArrival: expectedArrival?.getTime() ?? null })
     }
-    result.testFinished = items.some((i) => isFinal(i.status))
+    result.testFinished = rows.some((r) => isFinal(r.status))
     return result
   }
 
@@ -319,7 +417,7 @@ export async function applyPush(
   for (const f of booked) {
     const item = pickMatch(items, f)
     if (!item) continue
-    const state = toLiveState(item, f)
+    const state = toLiveState(item, f, now)
     result.events += await applyState(db, f, state, now)
     if (state.status === 'landed' || state.status === 'cancelled') result.finished.push(f.id)
   }

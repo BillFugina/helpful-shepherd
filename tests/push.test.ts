@@ -17,6 +17,7 @@ import {
   adbClient,
   readCredits,
   canonNumber,
+  effectiveStatus,
   hashToken,
   matchesFlight,
   newToken,
@@ -31,6 +32,7 @@ import type { FlightSpec } from '../server/flights/provider.js'
 import { pushFeedOn } from '../server/flights/provider.js'
 import {
   applyPush,
+  describeLeg,
   endSubscription,
   listTests,
   MAX_TESTS,
@@ -119,6 +121,47 @@ describe('AeroDataBox pushes, without a database', () => {
       { ...spec, direction: 'departure', fromAirport: 'RDU', toAirport: 'BOS' },
     )
     expect(leaving.gate).toBe('A4')
+  })
+
+  it('works the status out from the times when AeroDataBox says Unknown', () => {
+    const now = new Date('2033-02-01T15:00:00Z')
+    const unknown = (over: Partial<AdbFlightItem> = {}) => pushed({ status: 'Unknown', ...over })
+    expect(effectiveStatus(unknown(), now)).toBe('Expected')
+    // Took off at 14:20, lands 16:30: in the air.
+    const flying = unknown({
+      departure: { ...pushed().departure, runwayTime: { utc: '2033-02-01 14:20Z' } },
+      arrival: {
+        ...pushed().arrival,
+        runwayTime: { utc: '2033-02-01 16:30Z' },
+        revisedTime: { utc: '2033-02-01 16:30Z' },
+      },
+    })
+    expect(effectiveStatus(flying, now)).toBe('Departed')
+    expect(toLiveState(flying, spec, now).status).toBe('departed')
+    // A runway time that is just the schedule copied over doesn't count yet.
+    const copied = unknown({ departure: { ...pushed().departure, runwayTime: { utc: '2033-02-01 14:00Z' } } })
+    expect(effectiveStatus(copied, new Date('2033-02-01T14:01:00Z'))).toBe('Expected')
+    expect(effectiveStatus(copied, new Date('2033-02-01T14:30:00Z'))).toBe('Departed')
+    // Landed once the arrival runway time has passed.
+    expect(effectiveStatus(flying, new Date('2033-02-01T16:35:00Z'))).toBe('Arrived')
+    expect(toLiveState(flying, spec, new Date('2033-02-01T16:35:00Z')).status).toBe('landed')
+    // A real status from AeroDataBox wins.
+    expect(effectiveStatus(pushed({ status: 'Boarding' }), now)).toBe('Boarding')
+
+    // The line a person reads names the route, the times in theatre time and how late it is.
+    expect(describeLeg(flying, 'Departed', now, 'B61017')).toBe(
+      'B6 1017 BOS to RDU: took off 9:20 AM ET, landing about 11:30 AM ET (20 min late), arrival gate C11',
+    )
+    const landed = { ...flying, arrival: { ...flying.arrival, baggageBelt: '6' } }
+    expect(describeLeg(landed, 'Arrived', new Date('2033-02-01T16:35:00Z'), 'B61017')).toBe(
+      'B6 1017 BOS to RDU: landed 11:30 AM ET (20 min late), arrival gate C11, bags at belt 6',
+    )
+    expect(describeLeg(unknown(), 'Expected', now, 'B61017')).toBe(
+      'B6 1017 BOS to RDU: leaves 9:00 AM ET, lands 11:10 AM ET, arrival gate C11',
+    )
+    expect(describeLeg(pushed({ status: 'Canceled' }), 'Canceled', now, 'B61017')).toBe(
+      'B6 1017 BOS to RDU: cancelled, arrival gate C11',
+    )
   })
 
   it('calls AeroDataBox directly with the key header, and never reports the key', async () => {
@@ -398,6 +441,65 @@ describe.skipIf(!url)('AeroDataBox pushes against Postgres', () => {
       new Date(Date.now() + 1000),
     )
     expect(same.testLines).toHaveLength(0)
+    // AeroDataBox says Unknown, but the flight took off: that is news, told in words.
+    const tookOff = await applyPush(
+      db,
+      test.id,
+      {
+        flights: [
+          pushed({
+            status: 'Unknown',
+            number: `B6 ${num}`,
+            departure: { ...pushed().departure, runwayTime: { utc: '2033-02-01 14:20Z' } },
+          }),
+        ],
+      },
+      new Date('2033-02-01T15:00:00Z'),
+    )
+    expect(tookOff.testLines).toHaveLength(1)
+    expect(tookOff.testLines[0]).toContain('took off 9:20 AM ET')
+    expect(tookOff.testLines[0]).not.toContain('Unknown')
+    // A later arrival estimate is news too; the same estimate again is not.
+    const later = (utc: string) =>
+      pushed({
+        status: 'Unknown',
+        number: `B6 ${num}`,
+        departure: { ...pushed().departure, runwayTime: { utc: '2033-02-01 14:20Z' } },
+        arrival: { ...pushed().arrival, revisedTime: { utc } },
+      })
+    const moved = await applyPush(
+      db,
+      test.id,
+      { flights: [later('2033-02-01 16:40Z')] },
+      new Date('2033-02-01T15:05:00Z'),
+    )
+    expect(moved.testLines).toHaveLength(1)
+    expect(moved.testLines[0]).toContain('(30 min late)')
+    const again = await applyPush(
+      db,
+      test.id,
+      { flights: [later('2033-02-01 16:41Z')] },
+      new Date('2033-02-01T15:06:00Z'),
+    )
+    expect(again.testLines).toHaveLength(0)
+    // Another leg with the same number gets its own line.
+    const otherLeg = await applyPush(
+      db,
+      test.id,
+      {
+        flights: [
+          pushed({
+            status: 'Unknown',
+            number: `B6 ${num}`,
+            departure: { airport: { iata: 'RDU' }, scheduledTime: { utc: '2033-02-01 18:00Z' } },
+            arrival: { airport: { iata: 'MCO' }, scheduledTime: { utc: '2033-02-01 19:45Z' } },
+          }),
+        ],
+      },
+      new Date('2033-02-01T15:07:00Z'),
+    )
+    expect(otherLeg.testLines).toHaveLength(1)
+    expect(otherLeg.testLines[0]).toContain('RDU to MCO')
     const done = await applyPush(db, test.id, { flights: [pushed({ status: 'Arrived' })] }, new Date(Date.now() + 2000))
     expect(done.testFinished).toBe(true)
     expect(await endSubscription(db, api, test.id)).toBe(true)
