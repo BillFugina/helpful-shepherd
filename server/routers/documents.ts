@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server'
-import { and, asc, count, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, isNull, ne } from 'drizzle-orm'
 import { z } from 'zod'
 import { isGuestUserId, levelAtLeast, levelFor, type FieldGroup, type Grants } from '../../shared/access.js'
 import {
@@ -9,6 +9,7 @@ import {
   documentRef,
   FILE_KINDS,
   flagInput,
+  formsToRemind,
   linkToken,
   linkUploadInput,
   MAX_FILE_BYTES,
@@ -23,7 +24,7 @@ import {
 } from '../../shared/documents.js'
 import { recordAudit } from '../audit.js'
 import { renderText } from '../contracts/pdf.js'
-import { theatreToday } from '../contracts/service.js'
+import { loadOrganization, theatreToday } from '../contracts/service.js'
 import { decryptField, encryptField, fieldKey } from '../crypto/fields.js'
 import type { Db } from '../db/client.js'
 import {
@@ -48,6 +49,14 @@ import {
   purgeExpired,
   purgeFile,
 } from '../documents/service.js'
+import {
+  lastReminders,
+  MAX_BULK_REMINDERS,
+  REMINDER_GAP_MS,
+  REMINDER_RECORD,
+  reminderEmail,
+} from '../documents/reminders.js'
+import { deliveryMode, sendEmail, type Delivery } from '../email/send.js'
 import { appOrigin } from '../env.js'
 import { adminProcedure, publicProcedure, router, staffProcedure, type SessionUser } from '../trpc.js'
 import { friendly, requireEdit, requireView } from '../writes.js'
@@ -228,6 +237,43 @@ async function openLink(db: Db, token: string, lock: boolean) {
   return { row, items }
 }
 
+/**
+ * Makes an upload link for these forms. Only a hash of the token is stored;
+ * the full address comes back once, to whoever asked for it.
+ */
+async function issueLink(
+  db: Db,
+  user: SessionUser,
+  eng: { id: string; personId: string },
+  documentTypes: readonly DocumentType[],
+) {
+  const settings = await loadSettings(db)
+  const token = newLinkToken()
+  const expiresAt = new Date(Date.now() + settings.linkDays * 24 * 60 * 60 * 1000)
+  const types = DOCUMENT_TYPES.filter((t) => documentTypes.includes(t))
+  const [link] = await db
+    .insert(uploadLink)
+    .values({
+      engagementId: eng.id,
+      tokenHash: hashLinkToken(token),
+      documentTypes: types,
+      expiresAt,
+      createdBy: user.id,
+    })
+    .returning({ id: uploadLink.id })
+  await recordAudit(db, {
+    actorId: user.id,
+    actorEmail: user.email,
+    action: 'create',
+    recordType: 'upload_link',
+    recordId: link!.id,
+    personId: eng.personId,
+    fieldGroup: 'documents',
+    detail: { documentTypes: types, expiresAt: expiresAt.toISOString() },
+  })
+  return { id: link!.id, url: `${appOrigin()}/upload/${token}`, expiresAt }
+}
+
 function linkState(l: typeof uploadLink.$inferSelect, now = Date.now()) {
   if (l.revokedAt) return 'revoked' as const
   if (l.expiresAt.getTime() <= now) return 'expired' as const
@@ -245,31 +291,8 @@ const linksRouter = router({
   create: staffProcedure.input(createLinkInput).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['documents'])
     const eng = await engagementOrThrow(ctx.db, input.engagementId)
-    const settings = await loadSettings(ctx.db)
-    const token = newLinkToken()
-    const expiresAt = new Date(Date.now() + settings.linkDays * 24 * 60 * 60 * 1000)
-    const types = DOCUMENT_TYPES.filter((t) => input.documentTypes.includes(t))
-    const [link] = await ctx.db
-      .insert(uploadLink)
-      .values({
-        engagementId: eng.id,
-        tokenHash: hashLinkToken(token),
-        documentTypes: types,
-        expiresAt,
-        createdBy: ctx.user.id,
-      })
-      .returning({ id: uploadLink.id })
-    await recordAudit(ctx.db, {
-      actorId: ctx.user.id,
-      actorEmail: ctx.user.email,
-      action: 'create',
-      recordType: 'upload_link',
-      recordId: link!.id,
-      personId: eng.personId,
-      fieldGroup: 'documents',
-      detail: { documentTypes: types, expiresAt: expiresAt.toISOString() },
-    })
-    return { id: link!.id, url: `${appOrigin()}/upload/${token}`, expiresAt }
+    const link = await issueLink(ctx.db, ctx.user, eng, input.documentTypes)
+    return { id: link.id, url: link.url, expiresAt: link.expiresAt }
   }),
 
   revoke: staffProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
@@ -392,9 +415,126 @@ export const uploadLinkRouter = router({
 })
 
 // ---------------------------------------------------------------------------
+// Reminders: an email naming the forms still needed, with a fresh upload link
+// ---------------------------------------------------------------------------
+
+type ReminderOutcome = Delivery | 'skipped' | 'failed'
+
+interface ReminderResult {
+  engagementId: string
+  name: string
+  outcome: ReminderOutcome
+  reason?: string
+  /** The email, when it didn't go out, so the Company Manager can send it herself. */
+  email?: { to: string; subject: string; text: string }
+}
+
+async function remindOne(ctx: { db: Db; user: SessionUser }, engagementId: string): Promise<ReminderResult> {
+  const [row] = await ctx.db
+    .select({
+      id: engagement.id,
+      personId: engagement.personId,
+      contractType: engagement.contractType,
+      isDemo: engagement.isDemo,
+      legalName: person.legalName,
+      preferredName: person.preferredName,
+      email: person.email,
+      title: production.title,
+    })
+    .from(engagement)
+    .innerJoin(person, eq(person.id, engagement.personId))
+    .innerJoin(production, eq(production.id, engagement.productionId))
+    .where(eq(engagement.id, engagementId))
+    .limit(1)
+  if (!row) return { engagementId, name: '', outcome: 'skipped', reason: 'That engagement no longer exists.' }
+  const name = row.preferredName?.trim() || row.legalName
+  const skip = (reason: string): ReminderResult => ({ engagementId, name, outcome: 'skipped', reason })
+  const forms = formsToRemind((await loadChecklists(ctx.db, [row])).get(row.id) ?? [])
+  if (!forms.length) return skip('Nothing is missing.')
+  const to = row.email?.trim()
+  if (!to) return skip('No email address on file.')
+  const last = (await lastReminders(ctx.db, [row.id])).get(row.id)
+  if (last?.delivery === 'sent' && Date.now() - last.at.getTime() < REMINDER_GAP_MS) {
+    return skip('A reminder went out within the last hour.')
+  }
+  const theatre = (await loadOrganization(ctx.db)).name ?? ''
+  // The link is saved before the email goes, so a link someone receives always
+  // exists. If the send fails, the unused link is turned off.
+  const link = await issueLink(ctx.db, ctx.user, row, forms)
+  const firstName = row.preferredName?.trim() || row.legalName.trim().split(/\s+/)[0] || ''
+  const email = reminderEmail({
+    firstName,
+    theatre,
+    productionTitle: row.title,
+    forms,
+    url: link.url,
+    expiresAt: link.expiresAt,
+    senderName: ctx.user.name,
+  })
+  let result: Awaited<ReturnType<typeof sendEmail>>
+  try {
+    result = await sendEmail({ to, ...email, replyTo: ctx.user.email }, { isDemo: row.isDemo })
+  } catch (err) {
+    await ctx.db.update(uploadLink).set({ revokedAt: new Date() }).where(eq(uploadLink.id, link.id))
+    return { engagementId, name, outcome: 'failed', reason: err instanceof Error ? err.message : 'Sending failed.' }
+  }
+  const outcome: ReminderResult = {
+    engagementId,
+    name,
+    outcome: result.delivery,
+    ...(result.reason ? { reason: result.reason } : {}),
+    ...(result.delivery === 'sent' ? {} : { email: { to, ...email } }),
+  }
+  try {
+    if (result.delivery === 'sent') {
+      // One live link per person: the one in the email they just got.
+      await ctx.db
+        .update(uploadLink)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(uploadLink.engagementId, row.id), isNull(uploadLink.revokedAt), ne(uploadLink.id, link.id)))
+    }
+    await recordAudit(ctx.db, {
+      actorId: ctx.user.id,
+      actorEmail: ctx.user.email,
+      action: 'send',
+      recordType: REMINDER_RECORD,
+      recordId: row.id,
+      personId: row.personId,
+      fieldGroup: 'documents',
+      // No address and no link: just what was asked for and what happened.
+      detail: { documentTypes: forms, delivery: result.delivery, linkId: link.id },
+    })
+  } catch (err) {
+    // The email has already gone (or been handed back); report that truthfully.
+    console.error('reminder: bookkeeping failed after send', err instanceof Error ? err.message : err)
+  }
+  return outcome
+}
+
+const remindersRouter = router({
+  /** Whether reminders really go out here, so the screen can say so before anyone clicks. */
+  status: staffProcedure.query(({ ctx }) => {
+    requireView(ctx.grants, 'documents')
+    return { mode: deliveryMode() }
+  }),
+
+  /** Emails each person the forms they still owe, with a fresh upload link. One or many. */
+  send: staffProcedure
+    .input(z.object({ engagementIds: z.array(z.uuid()).min(1).max(MAX_BULK_REMINDERS) }))
+    .mutation(async ({ ctx, input }) => {
+      requireEdit(ctx.grants, ['documents'])
+      requireView(ctx.grants, 'contact')
+      const results: ReminderResult[] = []
+      for (const id of new Set(input.engagementIds)) results.push(await remindOne(ctx, id))
+      return { mode: deliveryMode(), results }
+    }),
+})
+
+// ---------------------------------------------------------------------------
 
 export const documentsRouter = router({
   links: linksRouter,
+  reminders: remindersRouter,
   settings: settingsRouter,
 
   /** Every engagement on a production with its checklist. Runs the retention backstop for staff. */
@@ -417,6 +557,7 @@ export const documentsRouter = router({
         personId: person.id,
         legalName: person.legalName,
         preferredName: person.preferredName,
+        email: person.email,
       })
       .from(engagement)
       .innerJoin(person, eq(person.id, engagement.personId))
@@ -424,13 +565,26 @@ export const documentsRouter = router({
       .orderBy(asc(person.legalName))
     const checklists = await loadChecklists(ctx.db, engagements)
     const settings = await loadSettings(ctx.db)
+    const reminders = await lastReminders(
+      ctx.db,
+      engagements.map((e) => e.id),
+    )
+    const seesContact = sees(ctx.grants, 'contact')
     return {
       production: prod,
       retentionYears: settings.retentionYears,
       retentionConfirmed: settings.retentionConfirmed,
-      engagements: engagements.map((e) => {
+      engagements: engagements.map(({ email, ...e }) => {
         const checklist = checklists.get(e.id) ?? []
-        return { ...e, checklist, summary: summarize(checklist) }
+        return {
+          ...e,
+          checklist,
+          summary: summarize(checklist),
+          // Whether a reminder could go: forms to ask for, and somewhere to send them.
+          toRemind: formsToRemind(checklist),
+          hasEmail: seesContact ? Boolean(email?.trim()) : null,
+          lastReminder: reminders.get(e.id) ?? null,
+        }
       }),
     }
   }),

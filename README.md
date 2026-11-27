@@ -170,6 +170,18 @@ guest.
   guest sessions, expired ones cleaned up, and guest sign-ins kept out of the
   audit log. Set `DEMO_GUEST=off` to turn it off.
 
+## Reminder emails
+
+The Company Manager can email a reminder to one person or everyone on a
+production with missing forms. Each reminder names the forms still needed
+(missing, or sent back by Finance) and carries a fresh upload link.
+
+Nothing is sent unless `RESEND_API_KEY` and `EMAIL_FROM` are set and
+`EMAIL_DELIVERY` is `allowlist` or `live`. Until then the app shows the email
+for her to copy. Demo people and reserved domains like example.com never get
+mail, the guest and the connector can't send, and the audit log records what
+was asked for without the address or the link.
+
 ## Local setup
 
 ```sh

@@ -7,6 +7,16 @@ const schema = z.object({
   FIELD_ENCRYPTION_KEY: z.string().optional(),
   // The public "Try the demo" guest sign-in. On unless set to off.
   DEMO_GUEST: z.enum(['on', 'off']).optional(),
+  // Outgoing email (reminders). With no key, nothing is sent: the app shows
+  // the email for the Company Manager to copy instead.
+  RESEND_API_KEY: z.string().optional(),
+  // e.g. "Theatre Raleigh <reminders@example.org>", on a domain verified in Resend.
+  EMAIL_FROM: z.string().optional(),
+  // log (default): never send. allowlist: send only to EMAIL_ALLOWLIST.
+  // live: send to real people; demo people still only to the allowlist.
+  EMAIL_DELIVERY: z.enum(['log', 'allowlist', 'live']).optional(),
+  // Comma-separated addresses that may get email in allowlist mode (and demo people in live mode).
+  EMAIL_ALLOWLIST: z.string().optional(),
   // Optional: defaults to the Vercel deployment URL, or localhost in dev.
   BETTER_AUTH_URL: z.url().optional(),
   VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),
