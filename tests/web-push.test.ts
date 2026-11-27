@@ -258,6 +258,29 @@ describe.skipIf(!url)('phone alerts against Postgres', () => {
     expect(sent).toHaveLength(0)
   })
 
+  it('a database hiccup after a delivery never counts against the device', async () => {
+    await db.delete(pushSubscription).where(eq(pushSubscription.userId, cm.id))
+    await as(cm).push.subscribe({ ...sub('steady'), deviceLabel: 'Mac (Chrome)' })
+    const send: PushSender = async () => ({ statusCode: 201, body: '', headers: {} })
+    const e = { ...env(), PUSH_DELIVERY: 'allowlist' as const, PUSH_ALLOWLIST: cm.email }
+    const notice = { title: 'Hi', body: 'There', path: '/arrivals' }
+    const broken = () => {
+      throw new Error('db down')
+    }
+    for (let i = 0; i < MAX_FAILURES + 1; i++) {
+      expect(await pushToUser(db, cm.id, notice, { send, env: e, now: broken })).toMatchObject({
+        sent: 1,
+        failed: 0,
+        removed: 0,
+      })
+    }
+    const [row] = await db.select().from(pushSubscription).where(eq(pushSubscription.userId, cm.id))
+    expect(row?.failures).toBe(0)
+    // Put back the device the tests below expect.
+    await as(cm).push.unsubscribe({ endpoint: sub('steady').endpoint })
+    await as(cm).push.subscribe({ ...sub('ok'), deviceLabel: 'Mac (Chrome)' })
+  })
+
   it('a demo login never gets a push, even listed and even with a device saved', async () => {
     await db
       .insert(pushSubscription)

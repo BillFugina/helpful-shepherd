@@ -152,6 +152,8 @@ export async function pushToUser(db: Db, userId: string, notice: PushNotice, dep
   const send = deps.send ?? sendNotification
   const now = deps.now ?? (() => new Date())
   for (const d of devices) {
+    let sendError: unknown
+    let delivered = false
     try {
       await send({ endpoint: d.endpoint, keys: { p256dh: d.p256dh, auth: d.auth } }, payload, {
         vapidDetails: vapid,
@@ -159,30 +161,41 @@ export async function pushToUser(db: Db, userId: string, notice: PushNotice, dep
         urgency: 'high',
         timeout: 10_000,
       })
-      await db.update(pushSubscription).set({ lastSentAt: now(), failures: 0 }).where(eq(pushSubscription.id, d.id))
-      out.sent++
+      delivered = true
     } catch (err) {
-      const status = (err as { statusCode?: unknown }).statusCode
-      if (status === 404 || status === 410) {
-        await db.delete(pushSubscription).where(eq(pushSubscription.id, d.id))
-        out.removed++
-        continue
+      sendError = err
+    }
+    if (delivered) {
+      out.sent++
+      // Bookkeeping only. A database hiccup here is not a delivery failure,
+      // so it never counts toward dropping the device.
+      try {
+        await db.update(pushSubscription).set({ lastSentAt: now(), failures: 0 }).where(eq(pushSubscription.id, d.id))
+      } catch {
+        console.error('push: could not record a delivery')
       }
-      // The status only: the push service's text can repeat the endpoint.
-      console.error('push: send failed', typeof status === 'number' ? status : 'network')
-      const [after] = await db
-        .update(pushSubscription)
-        .set({ failures: sql`${pushSubscription.failures} + 1` })
-        .where(eq(pushSubscription.id, d.id))
-        .returning({ failures: pushSubscription.failures })
-      if (after && after.failures >= MAX_FAILURES) {
-        await db
-          .delete(pushSubscription)
-          .where(and(eq(pushSubscription.id, d.id), gte(pushSubscription.failures, MAX_FAILURES)))
-        out.removed++
-      } else {
-        out.failed++
-      }
+      continue
+    }
+    const status = (sendError as { statusCode?: unknown }).statusCode
+    if (status === 404 || status === 410) {
+      await db.delete(pushSubscription).where(eq(pushSubscription.id, d.id))
+      out.removed++
+      continue
+    }
+    // The status only: the push service's text can repeat the endpoint.
+    console.error('push: send failed', typeof status === 'number' ? status : 'network')
+    const [after] = await db
+      .update(pushSubscription)
+      .set({ failures: sql`${pushSubscription.failures} + 1` })
+      .where(eq(pushSubscription.id, d.id))
+      .returning({ failures: pushSubscription.failures })
+    if (after && after.failures >= MAX_FAILURES) {
+      await db
+        .delete(pushSubscription)
+        .where(and(eq(pushSubscription.id, d.id), gte(pushSubscription.failures, MAX_FAILURES)))
+      out.removed++
+    } else {
+      out.failed++
     }
   }
   return out
