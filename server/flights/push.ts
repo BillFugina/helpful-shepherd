@@ -160,13 +160,14 @@ export async function startTest(
   return sub
 }
 
-/** Recent tests with what each received, newest first. Flight data only. */
+/** Running tests, then recent ones, newest first, with what each received. Flight data only. */
 export async function listTests(db: Db) {
   const subs = await db
     .select()
     .from(flightSubscription)
     .where(eq(flightSubscription.purpose, 'test'))
-    .orderBy(desc(flightSubscription.createdAt))
+    // Running tests first, so each keeps its Stop button however many ended since.
+    .orderBy(desc(flightSubscription.active), desc(flightSubscription.createdAt))
     .limit(5)
   const pushes = subs.length
     ? await db

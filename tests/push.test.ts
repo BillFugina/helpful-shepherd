@@ -28,7 +28,15 @@ import {
 } from '../server/flights/aerodatabox.js'
 import type { FlightSpec } from '../server/flights/provider.js'
 import { pushFeedOn } from '../server/flights/provider.js'
-import { applyPush, endSubscription, MAX_TESTS, releaseFlight, startTest, watchFlight } from '../server/flights/push.js'
+import {
+  applyPush,
+  endSubscription,
+  listTests,
+  MAX_TESTS,
+  releaseFlight,
+  startTest,
+  watchFlight,
+} from '../server/flights/push.js'
 import { handleFlightPush } from '../server/flights/webhook.js'
 import { sleepInPieces } from '../server/inngest/functions.js'
 import { appRouter } from '../server/routers/index.js'
@@ -367,6 +375,23 @@ describe.skipIf(!url)('AeroDataBox pushes against Postgres', () => {
     } finally {
       for (const id of running) await endSubscription(db, api, id)
       subs.push(...running)
+    }
+  })
+
+  it('a running test stays listed, with its Stop button, however many ended after it', async () => {
+    const { api } = fakeApi()
+    const stuck = await startTest(db, api, { flightNumber: 'UA1', userId: cm.id, origin: 'https://app.test' })
+    subs.push(stuck.id)
+    try {
+      for (let i = 0; i < 6; i++) {
+        const t = await startTest(db, api, { flightNumber: `UA${i + 2}`, userId: cm.id, origin: 'https://app.test' })
+        subs.push(t.id)
+        await endSubscription(db, api, t.id)
+      }
+      const listed = await listTests(db)
+      expect(listed.find((t) => t.id === stuck.id)).toMatchObject({ active: true })
+    } finally {
+      await endSubscription(db, api, stuck.id)
     }
   })
 })
