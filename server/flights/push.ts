@@ -247,10 +247,9 @@ export function describeLeg(i: AdbFlightItem, status: string, now: Date, fallbac
   const number = short(i.number, 20) ?? fallbackNumber
   const route = [i.departure?.airport?.iata, i.arrival?.airport?.iata].filter(Boolean).join(' to ')
   const scheduledArrival = parseUtc(i.arrival?.scheduledTime?.utc)
-  const departure = happenedAt(i.departure, now) ?? bestTime(i.departure)
-  // Only a runway time that has passed is a takeoff; anything else is an estimate.
-  const runway = parseUtc(i.departure?.runwayTime?.utc)
-  const tookOff = runway && runway.getTime() <= now.getTime() ? runway : null
+  // Only a runway time that has passed (and isn't the schedule copied over) is a takeoff.
+  const tookOff = happenedAt(i.departure, now)
+  const departure = tookOff ?? bestTime(i.departure)
   const arrival = bestTime(i.arrival)
   let what: string
   switch (status) {
