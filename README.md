@@ -84,10 +84,8 @@ the cloud), Better Auth with required two-factor, deployed as Vercel functions.
   that trip warnings in the second production. The first travel day is Jan 10,
   2027, with a delay, a gate change and an early landing.
 
-**Not yet:** the plan runs the flight tracker on a schedule (Inngest) with
-phone push alerts and an "arriving tomorrow" summary. Here the tracker runs
-when someone looks at the board, throttled to once a minute per flight. The
-scheduled job needs an Inngest account and push keys.
+The tracker also runs when someone looks at the board, throttled to once a
+minute per flight, so the board works with or without the scheduled job below.
 
 ## What's here (housing)
 
@@ -148,6 +146,37 @@ scheduled job needs an Inngest account and push keys.
 **Not yet:** emailing links, reminders and a daily digest need an email
 service or Inngest. Files live in Postgres rather than Vercel Blob so no new
 account is needed; swapping in Blob later is a contained change.
+
+## Flight alerts and "arriving tomorrow" (Inngest)
+
+Two scheduled functions, served at `/api/inngest`:
+
+- **Check flights** every 15 minutes from 6 AM to 10:45 PM Raleigh time
+  (overnight it rests so the free-tier database can sleep). It runs the same
+  tracker as the board, through the same feed adapter and demo clock, then
+  emails the Company Manager what changed: a delay, a gate change, a
+  cancellation or a landing. One email per run, each change only once.
+  Changes more than six hours old (in the feed's time) are marked done
+  without an email.
+- **Arriving tomorrow** at 6 PM: one email per production with anyone
+  landing the next day (the feed's next day, so it follows the demo clock):
+  their flight in, car pickup, and the place and room name where they sleep.
+  Never an address, door code or how to get in, and no phone numbers or
+  booking codes in any email. A production gets one summary per day, even if
+  the job runs twice.
+
+Emails go to Company Manager logins that have finished two-factor setup,
+through the same email settings as reminders, so in allowlist mode only
+listed addresses get them and demo addresses never do. The guest demo never
+runs the tracker or sends anything, and the audit log records counts only.
+
+Without `INNGEST_SIGNING_KEY` the endpoint is a 404 and nothing is scheduled.
+To turn it on, install the Inngest integration on the Vercel project (it sets
+`INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY`), redeploy, and sync the app in
+Inngest at `https://<your domain>/api/inngest`. Locally, set `INNGEST_DEV=1`
+and run `npx inngest-cli@latest dev -u http://localhost:3001/api/inngest`.
+
+**Not yet:** phone push alerts (web push needs VAPID keys and a service worker).
 
 ## Guest demo
 

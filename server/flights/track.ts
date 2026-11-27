@@ -81,8 +81,8 @@ export interface TrackResult {
  * claimed first (by stamping live_checked_at), so two people refreshing the
  * board at once can't both log the same change.
  *
- * The plan runs this from a scheduled job (Inngest) with push alerts; until
- * that's set up it runs when someone looks at the board.
+ * Runs from the scheduled Inngest job (server/inngest/functions.ts) when
+ * it's connected, and whenever someone looks at the board.
  */
 export async function trackFlights(db: Db, provider: FlightStatusProvider, now: Date): Promise<TrackResult> {
   const windowStart = new Date(now.getTime() - 6 * 3_600_000)

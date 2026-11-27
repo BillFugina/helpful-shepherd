@@ -17,6 +17,11 @@ const schema = z.object({
   EMAIL_DELIVERY: z.enum(['log', 'allowlist', 'live']).optional(),
   // Comma-separated addresses that may get email in allowlist mode (and demo people in live mode).
   EMAIL_ALLOWLIST: z.string().optional(),
+  // Scheduled flight checks and alert emails (Inngest). Without a signing key
+  // /api/inngest is off and the tracker runs only when the board is opened.
+  // The Inngest Vercel integration sets both.
+  INNGEST_EVENT_KEY: z.string().optional(),
+  INNGEST_SIGNING_KEY: z.string().optional(),
   // Optional: defaults to the Vercel deployment URL, or localhost in dev.
   BETTER_AUTH_URL: z.url().optional(),
   VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),
