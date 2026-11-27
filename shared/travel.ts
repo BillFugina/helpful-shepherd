@@ -519,3 +519,10 @@ export function housingMoves(
       a.personName.localeCompare(b.personName),
   )
 }
+
+/**
+ * How many AeroDataBox alert credits staff can add at once from the Arrivals
+ * page. Each credit uses one API unit from the AeroDataBox plan.
+ */
+export const TOP_UP_CREDITS = [50, 100, 500] as const
+export type TopUpCredits = (typeof TOP_UP_CREDITS)[number]

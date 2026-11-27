@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router'
 import { ADMIN_ROLE } from '../../shared/access'
 import { PIPELINE_LABELS } from '../../shared/roster'
 import { addDays, THEATRE_AIRPORT, zonedToUtc } from '../../shared/time'
+import { TOP_UP_CREDITS, type TopUpCredits } from '../../shared/travel'
 import { loadGuestClock, saveGuestClock } from '../lib/demo'
 import { errorText } from '../lib/errors'
 import { formatDate, useCan } from '../lib/fields'
@@ -431,6 +432,7 @@ function LiveTest() {
         Enter a flight that flies in the next few hours. Updates show here and are emailed to you. The test ends when
         the flight lands, or after 12 hours. Each update costs one AeroDataBox credit.
       </p>
+      <AlertCredits />
       <form
         className="actions"
         onSubmit={(e) => {
@@ -486,6 +488,87 @@ function LiveTest() {
         </div>
       ))}
       <p className="muted small">Flight data: AeroDataBox.</p>
+    </div>
+  )
+}
+
+/**
+ * AeroDataBox's alert credit balance, shared by every flight it watches, with
+ * a way to add more. At zero AeroDataBox sends no updates at all.
+ */
+function AlertCredits() {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const [amount, setAmount] = useState<TopUpCredits>(100)
+  const [confirming, setConfirming] = useState(false)
+  const credits = useQuery({ ...trpc.arrivals.alertCredits.queryOptions(), refetchInterval: 60_000 })
+  const topUp = useMutation(
+    trpc.arrivals.topUpCredits.mutationOptions({
+      onSuccess: () => {
+        setConfirming(false)
+        return queryClient.invalidateQueries({ queryKey: trpc.arrivals.alertCredits.queryKey() })
+      },
+    }),
+  )
+  if (!credits.data?.available) return null
+  const n = credits.data.credits
+
+  return (
+    <div className="live-test-credits">
+      <p className="small">
+        Alert credits:{' '}
+        {credits.data.error ? (
+          <span className="error">could not be read from AeroDataBox</span>
+        ) : n === null ? (
+          'unknown'
+        ) : (
+          <strong>{n}</strong>
+        )}
+        {n === 0 ? <span className="error"> AeroDataBox sends no updates until you add more.</span> : null}
+      </p>
+      {credits.data.auto ? (
+        <p className="muted small">
+          {credits.data.auto.on
+            ? `Automatic top-up: below ${credits.data.auto.below} credits, adds ${credits.data.auto.amount}, up to ${credits.data.auto.monthlyMax.toLocaleString()} a month (${credits.data.auto.usedThisMonth.toLocaleString()} added this month).`
+            : 'Automatic top-up is off.'}
+        </p>
+      ) : null}
+      {confirming ? (
+        <div className="actions">
+          <span className="small">
+            Add {amount} credits? This uses {amount} API units from your AeroDataBox plan.
+          </span>
+          <button type="button" disabled={topUp.isPending} onClick={() => topUp.mutate({ credits: amount })}>
+            Add {amount} credits
+          </button>
+          <button type="button" className="link" disabled={topUp.isPending} onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <form
+          className="actions"
+          onSubmit={(e) => {
+            e.preventDefault()
+            topUp.reset()
+            setConfirming(true)
+          }}
+        >
+          <select
+            aria-label="Credits to add"
+            value={amount}
+            onChange={(e) => setAmount(Number(e.target.value) as TopUpCredits)}
+          >
+            {TOP_UP_CREDITS.map((c) => (
+              <option key={c} value={c}>
+                {c} credits
+              </option>
+            ))}
+          </select>
+          <button type="submit">Top up</button>
+        </form>
+      )}
+      {topUp.error ? <p className="error">{errorText(topUp.error)}</p> : null}
     </div>
   )
 }
