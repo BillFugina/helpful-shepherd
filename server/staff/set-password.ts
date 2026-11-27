@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { hashPassword } from 'better-auth/crypto'
-import { and, eq, gt, like, sql } from 'drizzle-orm'
+import { and, eq, gt, isNull, like, sql } from 'drizzle-orm'
 import { isGuestUserId } from '../../shared/access.js'
 import { recordAudit } from '../audit.js'
 import type { Db } from '../db/client.js'
-import { account, session, user, userRole, verification } from '../db/schema.js'
+import {
+  account,
+  oauthAccessToken,
+  oauthConsent,
+  oauthRefreshToken,
+  session,
+  user,
+  userRole,
+  verification,
+} from '../db/schema.js'
 import { hashLinkToken, newLinkToken } from '../documents/service.js'
 import { sendEmail, type Delivery } from '../email/send.js'
 import { appOrigin } from '../env.js'
@@ -56,27 +65,34 @@ export async function requestSetPassword(db: Db, email: string, deps: { send?: S
     .limit(1)
   if (!staff || isGuestUserId(staff.id)) return
 
-  const [recent] = await db
-    .select({ id: verification.id })
-    .from(verification)
-    .where(
-      and(
-        eq(verification.value, staff.id),
-        like(verification.identifier, `${SET_PASSWORD_PREFIX}%`),
-        gt(verification.createdAt, new Date(Date.now() - SET_PASSWORD_GAP_MS)),
-      ),
-    )
-    .limit(1)
-  if (recent) return
-
+  // Check and claim the ten-minute slot under a lock on the login, so a burst
+  // of requests can't all pass the check before one of them saves a link.
   const token = newLinkToken()
   const id = randomUUID()
-  await db.insert(verification).values({
-    id,
-    identifier: SET_PASSWORD_PREFIX + hashLinkToken(token),
-    value: staff.id,
-    expiresAt: new Date(Date.now() + SET_PASSWORD_TTL_MS),
+  const claimed = await db.transaction(async (tx) => {
+    await tx.select({ id: user.id }).from(user).where(eq(user.id, staff.id)).for('update')
+    const [recent] = await tx
+      .select({ id: verification.id })
+      .from(verification)
+      .where(
+        and(
+          eq(verification.value, staff.id),
+          like(verification.identifier, `${SET_PASSWORD_PREFIX}%`),
+          gt(verification.createdAt, new Date(Date.now() - SET_PASSWORD_GAP_MS)),
+        ),
+      )
+      .limit(1)
+    if (recent) return false
+    await tx.insert(verification).values({
+      id,
+      identifier: SET_PASSWORD_PREFIX + hashLinkToken(token),
+      value: staff.id,
+      expiresAt: new Date(Date.now() + SET_PASSWORD_TTL_MS),
+    })
+    return true
   })
+  if (!claimed) return
+
   const { subject, text } = setPasswordEmail({ name: staff.name, url: `${appOrigin()}/set-password/${token}` })
   let delivery: Delivery | 'failed'
   try {
@@ -98,17 +114,22 @@ export async function requestSetPassword(db: Db, email: string, deps: { send?: S
 
 /**
  * Sets the password behind a link and uses the link up. Signs the login out
- * everywhere, so an old session can't outlive a password change.
+ * everywhere and disconnects its apps, so nothing outlives a password change.
  */
 export async function setPasswordWithToken(db: Db, token: string, password: string): Promise<'ok' | 'invalid'> {
   if (password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) return 'invalid'
+  const live = and(
+    eq(verification.identifier, SET_PASSWORD_PREFIX + hashLinkToken(token)),
+    gt(verification.expiresAt, new Date()),
+  )
+  // A bad link is turned away before the (deliberately slow) password hash runs.
+  const [found] = await db.select({ id: verification.id }).from(verification).where(live).limit(1)
+  if (!found) return 'invalid'
   const hash = await hashPassword(password)
   return db.transaction(async (tx) => {
-    const [link] = await tx
-      .delete(verification)
-      .where(eq(verification.identifier, SET_PASSWORD_PREFIX + hashLinkToken(token)))
-      .returning({ userId: verification.value, expiresAt: verification.expiresAt })
-    if (!link || link.expiresAt.getTime() <= Date.now() || isGuestUserId(link.userId)) return 'invalid'
+    // Deleting is what uses the link up, so two tabs can't both use it.
+    const [link] = await tx.delete(verification).where(live).returning({ userId: verification.value })
+    if (!link || isGuestUserId(link.userId)) return 'invalid'
     const [existing] = await tx
       .select({ id: account.id })
       .from(account)
@@ -129,7 +150,19 @@ export async function setPasswordWithToken(db: Db, token: string, password: stri
     await tx
       .delete(verification)
       .where(and(eq(verification.value, link.userId), like(verification.identifier, `${SET_PASSWORD_PREFIX}%`)))
+    // Sign out everywhere, Claude's connector included: a connection made
+    // before the change mustn't outlive it.
     await tx.delete(session).where(eq(session.userId, link.userId))
+    const now = new Date()
+    await tx.delete(oauthConsent).where(eq(oauthConsent.userId, link.userId))
+    await tx
+      .update(oauthRefreshToken)
+      .set({ revoked: now })
+      .where(and(eq(oauthRefreshToken.userId, link.userId), isNull(oauthRefreshToken.revoked)))
+    await tx
+      .update(oauthAccessToken)
+      .set({ revoked: now })
+      .where(and(eq(oauthAccessToken.userId, link.userId), isNull(oauthAccessToken.revoked)))
     await recordAudit(tx, {
       actorId: link.userId,
       action: 'update',

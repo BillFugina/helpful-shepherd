@@ -3,7 +3,17 @@ import { verifyPassword } from 'better-auth/crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDb, type Db } from '../server/db/client.js'
-import { account, auditEvent, session, user, userRole, verification } from '../server/db/schema.js'
+import {
+  account,
+  auditEvent,
+  oauthAccessToken,
+  oauthClient,
+  oauthConsent,
+  session,
+  user,
+  userRole,
+  verification,
+} from '../server/db/schema.js'
 import type { sendEmail } from '../server/email/send.js'
 import { appRouter } from '../server/routers/index.js'
 import {
@@ -115,6 +125,45 @@ describe.skipIf(!url)('set-password links against Postgres', () => {
     // Two-factor is untouched.
     const [row] = await db.select({ tf: user.twoFactorEnabled }).from(user).where(eq(user.id, staffId))
     expect(row!.tf).toBe(false)
+  })
+
+  it('sends one email when several requests arrive at once', async () => {
+    await db.delete(verification).where(eq(verification.value, staffId))
+    sent.length = 0
+    await Promise.all(Array.from({ length: 5 }, () => requestSetPassword(db, staffEmail, { send: fakeSend })))
+    expect(sent).toHaveLength(1)
+    expect(await links(staffId)).toHaveLength(1)
+  })
+
+  it('disconnects Claude when the password changes', async () => {
+    const clientId = `client-${tag}`
+    await db.insert(oauthClient).values({ id: randomUUID(), clientId, redirectUris: ['https://claude.test/cb'] })
+    const now = new Date()
+    await db.insert(oauthConsent).values({
+      id: randomUUID(),
+      clientId,
+      userId: staffId,
+      scopes: ['openid'],
+      createdAt: now,
+      updatedAt: now,
+    })
+    await db.insert(oauthAccessToken).values({
+      id: randomUUID(),
+      token: randomUUID(),
+      clientId,
+      userId: staffId,
+      scopes: ['openid'],
+      createdAt: now,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    await db.delete(verification).where(eq(verification.value, staffId))
+    sent.length = 0
+    await requestSetPassword(db, staffEmail, { send: fakeSend })
+    expect(await setPasswordWithToken(db, tokenFrom(sent[0]!.text), 'a long new password 4')).toBe('ok')
+    expect(await db.select().from(oauthConsent).where(eq(oauthConsent.userId, staffId))).toHaveLength(0)
+    const tokens = await db.select().from(oauthAccessToken).where(eq(oauthAccessToken.userId, staffId))
+    expect(tokens.every((t) => t.revoked !== null)).toBe(true)
+    await db.delete(oauthClient).where(eq(oauthClient.clientId, clientId))
   })
 
   it('refuses an expired link', async () => {
