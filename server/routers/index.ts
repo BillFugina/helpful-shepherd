@@ -17,6 +17,7 @@ import { passwordRouter } from './password.js'
 import { peopleRouter } from './people.js'
 import { productionsRouter, seasonsRouter } from './seasons.js'
 import { pushRouter } from './push.js'
+import { remindersRouter } from './reminders.js'
 import { travelRouter } from './travel.js'
 
 export const appRouter = router({
@@ -48,6 +49,8 @@ export const appRouter = router({
   connections: connectionsRouter,
   contracts: contractsRouter,
   documents: documentsRouter,
+  /** Automatic reminders and the morning digest. */
+  reminders: remindersRouter,
   /** Phone alerts (Web Push) for this login's devices. */
   push: pushRouter,
   /** The page behind an upload link. Public: the link is the key. */

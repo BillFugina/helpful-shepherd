@@ -33,6 +33,7 @@ import { SetupTwoFactorPage } from './pages/SetupTwoFactorPage'
 import { SignInPage } from './pages/SignInPage'
 import { TravelPage } from './pages/TravelPage'
 import { RequireStaff } from './pages/RequireStaff'
+import { RemindersPage } from './pages/RemindersPage'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -72,6 +73,7 @@ const router = createBrowserRouter([
           { path: '/drafts', element: <DraftsPage /> },
           { path: '/settings/connections', element: <ConnectionsPage /> },
           { path: '/settings/alerts', element: <AlertsPage /> },
+          { path: '/settings/reminders', element: <RemindersPage /> },
           { path: '/admin/access', element: <AccessPage /> },
           { path: '/admin/audit', element: <AuditPage /> },
         ],

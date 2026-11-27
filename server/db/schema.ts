@@ -1079,3 +1079,28 @@ export const documentSettings = pgTable(
     check('document_settings_retention', sql`${t.retentionYears} between 1 and 10`),
   ],
 )
+
+// ---------------------------------------------------------------------------
+// Automatic reminders. One row. Nothing scans for due work: each reminder is a
+// sleeping Inngest run started by the change that set its date (see
+// server/reminders/).
+// ---------------------------------------------------------------------------
+
+export const reminderSettings = pgTable(
+  'reminder_settings',
+  {
+    id: integer('id').primaryKey().default(1),
+    // Email people still missing forms this many days before first rehearsal. 0 is off.
+    paperworkDaysBefore: integer('paperwork_days_before').notNull().default(14),
+    // Flag a contract still unsigned this many days after it went out. 0 is off.
+    contractDaysAfter: integer('contract_days_after').notNull().default(7),
+    // The Company Manager's morning digest.
+    digestOn: boolean('digest_on').notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [
+    check('reminder_settings_single_row', sql`${t.id} = 1`),
+    check('reminder_settings_paperwork_days', sql`${t.paperworkDaysBefore} between 0 and 90`),
+    check('reminder_settings_contract_days', sql`${t.contractDaysAfter} between 0 and 60`),
+  ],
+)

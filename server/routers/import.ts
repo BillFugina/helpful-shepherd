@@ -7,6 +7,7 @@ import { agent, engagement, person } from '../db/schema.js'
 import { createAgent, createEngagement, createPerson, requireProduction } from '../roster/create.js'
 import { router, staffProcedure } from '../trpc.js'
 import { asUserError, friendly, requireEdit } from '../writes.js'
+import { paperworkChanged } from '../reminders/announce.js'
 
 export interface ImportRowResult {
   /** 1-based, counting data rows (the header isn't row 1). */
@@ -180,6 +181,7 @@ export const importRouter = router({
       if (!(error instanceof DryRunRollback)) throw error
     }
     const hasErrors = results.some((r) => r.status === 'error')
+    if (!input.dryRun && !hasErrors) await paperworkChanged([input.productionId])
     return {
       imported: !input.dryRun && !hasErrors,
       counts: {
