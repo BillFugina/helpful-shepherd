@@ -157,8 +157,63 @@ export interface AdbClient {
   subscribe(subject: string, callbackUrl: string): Promise<{ id: string }>
   /** Removing is free. A subscription that's already gone counts as removed. */
   unsubscribe(id: string): Promise<void>
-  /** Credits left, shared by all subscriptions. */
+  /** Credits left, shared by all subscriptions. Free to call. */
   balance(): Promise<number | null>
+  /**
+   * Adds credits to the shared balance. Each credit uses one API unit from the
+   * plan, and AeroDataBox caps how many can be added at once. Returns the new
+   * balance when the reply gives it.
+   */
+  refill(credits: number): Promise<number | null>
+}
+
+/**
+ * Reads the credit count from a balance reply. The guide names the field
+ * creditsRemaining (pushes carry it under balance); the other names are
+ * accepted in case the balance endpoints word it differently.
+ */
+export function readCredits(json: unknown): number | null {
+  if (!json || typeof json !== 'object') return null
+  const o = json as Record<string, unknown>
+  for (const key of ['creditsRemaining', 'credits', 'balance', 'creditsBalance']) {
+    if (typeof o[key] === 'number') return o[key]
+  }
+  return null
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reads a balance reply. Returns null for an empty reply (204 or no body),
+ * and logs the shape of a reply it can't read so the field name can be fixed.
+ */
+async function readBalanceReply(res: Response, what: string): Promise<number | null> {
+  if (res.status === 204) return null
+  const text = await res.text().catch(() => null)
+  if (text === null) {
+    // The body failed to arrive: unreadable, not empty.
+    if (what === 'balance') throw new AdbError(res.status, `${what} (body could not be read)`)
+    return null
+  }
+  if (!text.trim()) return null
+  const json = parseJson(text)
+  const credits = readCredits(json)
+  if (credits === null) {
+    const keys = json && typeof json === 'object' ? Object.keys(json).join(',') : typeof json
+    console.warn(
+      `AeroDataBox ${what} reply had no credit count (HTTP ${res.status}, ${res.headers.get('content-type') ?? 'no type'}, keys: ${keys})`,
+    )
+    // An unreadable balance is not the same as an empty one. A refill that
+    // went through still counts; the caller reads the balance again.
+    if (what === 'balance') throw new AdbError(res.status, `${what} (unreadable reply)`)
+  }
+  return credits
 }
 
 /** Failed calls report the status only, never the key or the response body. */
@@ -202,8 +257,14 @@ export function adbClient(apiKey: string, fetchImpl: typeof fetch = fetch): AdbC
     async balance() {
       const res = await call('GET', '/subscriptions/balance')
       if (!res.ok) throw new AdbError(res.status, 'balance')
-      const json = (await res.json()) as { creditsRemaining?: number | null }
-      return typeof json.creditsRemaining === 'number' ? json.creditsRemaining : null
+      // An account that has never been topped up has no balance yet, and
+      // AeroDataBox answers with no body. That's zero credits, not unknown.
+      return (await readBalanceReply(res, 'balance')) ?? 0
+    },
+    async refill(credits) {
+      const res = await call('POST', '/subscriptions/balance/refill', { credits })
+      if (!res.ok) throw new AdbError(res.status, 'refill')
+      return readBalanceReply(res, 'refill')
     },
   }
 }
