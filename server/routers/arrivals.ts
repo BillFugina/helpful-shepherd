@@ -360,7 +360,18 @@ export const arrivalsRouter = router({
       }
       if (!(await testStarted(sub.id))) {
         // Without Inngest the test would get no updates and never end on its own.
-        await endSubscription(ctx.db, api, sub.id)
+        const ended = await endSubscription(ctx.db, api, sub.id).catch((error: unknown) => {
+          console.error('Could not end the live test after Inngest refused its start event', error)
+          return false
+        })
+        if (!ended) {
+          // It stays in the list with its Stop button, so it can be ended by hand.
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message:
+              'Live flight tests need Inngest, which could not be reached. The test could not be cancelled at AeroDataBox either: press Stop on it to end it.',
+          })
+        }
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: 'Live flight tests need Inngest, which could not be reached. Nothing was started.',
