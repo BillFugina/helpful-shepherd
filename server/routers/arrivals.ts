@@ -1,4 +1,6 @@
+import { TRPCError } from '@trpc/server'
 import { and, asc, desc, eq, gte, inArray, lt, or } from 'drizzle-orm'
+import { z } from 'zod'
 import { levelAtLeast, levelFor, type FieldGroup, type Grants } from '../../shared/access.js'
 import { addDays, dayBounds, localDate, THEATRE_TZ } from '../../shared/time.js'
 import { boardInput, setClockInput } from '../../shared/travel.js'
@@ -14,10 +16,14 @@ import {
   production,
   rentalCar,
 } from '../db/schema.js'
+import { flightsChanged, testStarted } from '../flights/announce.js'
 import { flightProvider } from '../flights/provider.js'
+import { adbFromEnv, endSubscription, listTests, startTest } from '../flights/push.js'
 import { replayFlight } from '../flights/replay.js'
 import { clockOffsetMs, feedNow, setDemoClock, trackFlights } from '../flights/track.js'
+import { inngestEnabled } from '../inngest/client.js'
 import { shortName } from '../travel/records.js'
+import { appOrigin } from '../env.js'
 import { adminProcedure, router, staffProcedure } from '../trpc.js'
 import { auditChange, requireEdit, requireView } from '../writes.js'
 
@@ -78,9 +84,11 @@ export const arrivalsRouter = router({
     // writes: their board is worked out from the feed in memory (replayFlight).
     const guestClock = ctx.guest && provider.usesDemoClock ? input.clockOffsetMs : undefined
     const now = guestClock !== undefined ? new Date(Date.now() + guestClock) : await feedNow(ctx.db, provider)
-    if (!ctx.guest) {
+    // With the AeroDataBox feed, updates are pushed in; there's nothing to ask.
+    if (!ctx.guest && provider.name === 'simulated') {
       try {
-        await trackFlights(ctx.db, provider, now)
+        const tracked = await trackFlights(ctx.db, provider, now)
+        if (tracked.events) await flightsChanged()
       } catch (error) {
         // The board still shows what it knows if the feed has a bad moment.
         console.error('flight tracker failed', error)
@@ -285,6 +293,9 @@ export const arrivalsRouter = router({
    */
   setClock: adminProcedure.input(setClockInput).mutation(async ({ ctx, input }) => {
     requireEdit(ctx.grants, ['travel_logistics'])
+    if (!flightProvider().usesDemoClock) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'The demo clock only works with the simulated flight feed.' })
+    }
     const offsetMs = new Date(input.at).getTime() - Date.now()
     await setDemoClock(ctx.db, offsetMs)
     await auditChange(ctx.db, ctx.user, {
@@ -300,6 +311,9 @@ export const arrivalsRouter = router({
 
   resetClock: adminProcedure.mutation(async ({ ctx }) => {
     requireEdit(ctx.grants, ['travel_logistics'])
+    if (!flightProvider().usesDemoClock) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'The demo clock only works with the simulated flight feed.' })
+    }
     await setDemoClock(ctx.db, 0)
     await auditChange(ctx.db, ctx.user, {
       action: 'update',
@@ -310,5 +324,75 @@ export const arrivalsRouter = router({
       detail: { reset: true },
     })
     return { offsetMs: 0 }
+  }),
+
+  /**
+   * The staff live test: watch any real flight number for a few hours and see
+   * AeroDataBox's pushes arrive. Shown only when an AeroDataBox key is set
+   * and Inngest is on (pushes and the test's time limit both go through it).
+   * Real flights only; it never touches the demo people.
+   */
+  liveTests: adminProcedure.query(async ({ ctx }) => {
+    requireView(ctx.grants, 'travel_logistics')
+    if (!adbFromEnv() || !inngestEnabled()) return { available: false as const, tests: [] }
+    return { available: true as const, tests: await listTests(ctx.db) }
+  }),
+
+  startLiveTest: adminProcedure
+    .input(z.object({ flightNumber: z.string().trim().min(3).max(12) }))
+    .mutation(async ({ ctx, input }) => {
+      requireEdit(ctx.grants, ['travel_logistics'])
+      const api = adbFromEnv()
+      if (!api) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No AeroDataBox key is set.' })
+      if (!inngestEnabled()) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Live flight tests need Inngest, which is off.' })
+      }
+      let sub
+      try {
+        sub = await startTest(ctx.db, api, {
+          flightNumber: input.flightNumber,
+          userId: ctx.user.id,
+          origin: appOrigin(),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not start the test.'
+        throw new TRPCError({ code: 'BAD_REQUEST', message })
+      }
+      if (!(await testStarted(sub.id))) {
+        // Without Inngest the test would get no updates and never end on its own.
+        const ended = await endSubscription(ctx.db, api, sub.id).catch((error: unknown) => {
+          console.error('Could not end the live test after Inngest refused its start event', error)
+          return false
+        })
+        if (!ended) {
+          // It stays in the list with its Stop button, so it can be ended by hand.
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message:
+              'Live flight tests need Inngest, which could not be reached. The test could not be cancelled at AeroDataBox either: press Stop on it to end it.',
+          })
+        }
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Live flight tests need Inngest, which could not be reached. Nothing was started.',
+        })
+      }
+      await auditChange(ctx.db, ctx.user, {
+        action: 'create',
+        recordType: 'flight_test',
+        recordId: sub.id,
+        keys: [],
+        fields: {},
+        detail: { flightNumber: sub.flightNumber },
+      })
+      return { id: sub.id }
+    }),
+
+  stopLiveTest: adminProcedure.input(z.object({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
+    requireEdit(ctx.grants, ['travel_logistics'])
+    const api = adbFromEnv()
+    if (!api) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No AeroDataBox key is set.' })
+    await endSubscription(ctx.db, api, input.id)
+    return { id: input.id }
   }),
 })

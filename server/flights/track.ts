@@ -41,7 +41,7 @@ export async function setDemoClock(db: Db, offsetMs: number): Promise<void> {
   })
 }
 
-type FlightRow = typeof flight.$inferSelect
+export type FlightRow = typeof flight.$inferSelect
 
 interface Change {
   kind: FlightEventKind
@@ -70,6 +70,35 @@ export function changesBetween(before: FlightRow, next: LiveState): Change[] {
   return out
 }
 
+/**
+ * Writes what a feed says about one flight into its live columns and logs what
+ * changed. Used by the tracker and by AeroDataBox pushes. Returns how many
+ * changes were logged.
+ */
+export async function applyState(db: Db, row: FlightRow, state: LiveState, now: Date): Promise<number> {
+  const changes = changesBetween(row, state)
+  await db.transaction(async (tx) => {
+    await tx
+      .update(flight)
+      .set({
+        liveStatus: state.status,
+        liveDeparture: state.departure,
+        liveArrival: state.arrival,
+        liveGate: state.gate,
+        liveTerminal: state.terminal,
+        liveBaggage: state.baggage,
+        liveCheckedAt: now,
+      })
+      .where(eq(flight.id, row.id))
+    if (changes.length) {
+      await tx
+        .insert(flightEvent)
+        .values(changes.map((c) => ({ flightId: row.id, at: now, kind: c.kind, detail: c.detail ?? null })))
+    }
+  })
+  return changes.length
+}
+
 export interface TrackResult {
   checked: number
   events: number
@@ -81,8 +110,8 @@ export interface TrackResult {
  * claimed first (by stamping live_checked_at), so two people refreshing the
  * board at once can't both log the same change.
  *
- * Runs from the scheduled Inngest job (server/inngest/functions.ts) when
- * it's connected, and whenever someone looks at the board.
+ * Runs whenever someone looks at the board (simulated feed only; the
+ * AeroDataBox feed pushes instead, see push.ts).
  */
 export async function trackFlights(db: Db, provider: FlightStatusProvider, now: Date): Promise<TrackResult> {
   const windowStart = new Date(now.getTime() - 6 * 3_600_000)
@@ -121,26 +150,7 @@ export async function trackFlights(db: Db, provider: FlightStatusProvider, now: 
   for (const row of claimed) {
     const state = await provider.status(row, now)
     if (!state) continue
-    const changes = changesBetween(row, state)
-    await db.transaction(async (tx) => {
-      await tx
-        .update(flight)
-        .set({
-          liveStatus: state.status,
-          liveDeparture: state.departure,
-          liveArrival: state.arrival,
-          liveGate: state.gate,
-          liveTerminal: state.terminal,
-          liveBaggage: state.baggage,
-        })
-        .where(eq(flight.id, row.id))
-      if (changes.length) {
-        await tx
-          .insert(flightEvent)
-          .values(changes.map((c) => ({ flightId: row.id, at: now, kind: c.kind, detail: c.detail ?? null })))
-      }
-    })
-    events += changes.length
+    events += await applyState(db, row, state, now)
   }
   return { checked: claimed.length, events }
 }

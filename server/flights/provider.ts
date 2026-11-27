@@ -30,7 +30,7 @@ export interface LiveState {
  * touching them. `null` means the feed has nothing on the flight.
  */
 export interface FlightStatusProvider {
-  readonly name: 'simulated'
+  readonly name: 'simulated' | 'aerodatabox'
   /** True when the feed follows the demo clock instead of the real one. */
   readonly usesDemoClock: boolean
   /** How long to wait before asking about the same flight again. */
@@ -144,9 +144,25 @@ export const simulatedProvider: FlightStatusProvider = {
 }
 
 /**
- * The feed this deployment uses. Only the simulated one exists for the demo;
- * a paid feed goes behind the same interface when the theater adopts the app.
+ * AeroDataBox pushes changes to /api/flight-push instead of being asked, so
+ * there's nothing to poll: the board never runs the tracker with this feed.
+ */
+export const pushProvider: FlightStatusProvider = {
+  name: 'aerodatabox',
+  usesDemoClock: false,
+  minIntervalMs: Number.POSITIVE_INFINITY,
+  status: () => Promise.resolve(null),
+}
+
+/** True when booked flights are tracked by AeroDataBox pushes (FLIGHT_FEED=aerodatabox with a key). */
+export function pushFeedOn(e: NodeJS.ProcessEnv = process.env): boolean {
+  return e.FLIGHT_FEED === 'aerodatabox' && !!e.AERODATABOX_API_KEY
+}
+
+/**
+ * The feed this deployment uses: the simulated one for the demo, or
+ * AeroDataBox pushes when FLIGHT_FEED=aerodatabox and a key is set.
  */
 export function flightProvider(): FlightStatusProvider {
-  return simulatedProvider
+  return pushFeedOn() ? pushProvider : simulatedProvider
 }

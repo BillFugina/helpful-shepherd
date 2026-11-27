@@ -97,6 +97,7 @@ describe('simulated flight feed', () => {
       liveTerminal: null,
       liveBaggage: null,
       liveCheckedAt: null,
+      pushSubscriptionId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }

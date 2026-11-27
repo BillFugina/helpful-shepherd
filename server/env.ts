@@ -17,11 +17,17 @@ const schema = z.object({
   EMAIL_DELIVERY: z.enum(['log', 'allowlist', 'live']).optional(),
   // Comma-separated addresses that may get email in allowlist mode (and demo people in live mode).
   EMAIL_ALLOWLIST: z.string().optional(),
-  // Scheduled flight checks and alert emails (Inngest). Without a signing key
-  // /api/inngest is off and the tracker runs only when the board is opened.
+  // Flight alerts and the arriving-tomorrow email (Inngest). Without a signing
+  // key /api/inngest is off and no emails go out on their own.
   // The Inngest Vercel integration sets both.
   INNGEST_EVENT_KEY: z.string().optional(),
   INNGEST_SIGNING_KEY: z.string().optional(),
+  // AeroDataBox (bought directly), for live flight updates pushed to
+  // /api/flight-push. With a key, staff can run a live test on any real flight.
+  AERODATABOX_API_KEY: z.string().optional(),
+  // simulated (default): the demo feed. aerodatabox: booked flights are watched
+  // by AeroDataBox from 3 hours before take-off until they land.
+  FLIGHT_FEED: z.enum(['simulated', 'aerodatabox']).optional(),
   // Optional: defaults to the Vercel deployment URL, or localhost in dev.
   BETTER_AUTH_URL: z.url().optional(),
   VERCEL_ENV: z.enum(['production', 'preview', 'development']).optional(),

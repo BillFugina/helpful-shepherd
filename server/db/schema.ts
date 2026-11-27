@@ -648,6 +648,10 @@ export const flight = pgTable(
     liveTerminal: text('live_terminal'),
     liveBaggage: text('live_baggage'),
     liveCheckedAt: timestamp('live_checked_at', { withTimezone: true }),
+    /** The AeroDataBox push subscription watching this flight now, if any. Shared by flights with the same number. */
+    pushSubscriptionId: uuid('push_subscription_id').references(() => flightSubscription.id, {
+      onDelete: 'set null',
+    }),
     ...timestamps,
   },
   (t) => [
@@ -656,6 +660,58 @@ export const flight = pgTable(
     index('flight_scheduled_departure_idx').on(t.scheduledDeparture),
     check('flight_departs_before_arriving', sql`${t.scheduledDeparture} < ${t.scheduledArrival}`),
   ],
+)
+
+/**
+ * A push subscription at AeroDataBox, keyed by flight number. Booked flights
+ * share one while they're in the air ('flight'); a Company Manager can also
+ * watch any real flight for a while to see pushes arrive ('test'). The
+ * callback URL carries a random token; only its hash is kept here.
+ */
+export const flightSubscription = pgTable(
+  'flight_subscription',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** AeroDataBox's subscription id. Null until the subscribe call returns. */
+    providerId: text('provider_id'),
+    /** Airline code and number with no spaces, upper case: "B61017". */
+    flightNumber: text('flight_number').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    /** 'flight' or 'test'. */
+    purpose: text('purpose').notNull(),
+    /** The staff user who started a test. */
+    startedBy: text('started_by'),
+    active: boolean('active').notNull().default(true),
+    creditsRemaining: integer('credits_remaining'),
+    lastPushAt: timestamp('last_push_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('flight_subscription_token_hash_uq').on(t.tokenHash),
+    // One live shared subscription per flight number, so two flights can't both create one.
+    uniqueIndex('flight_subscription_flight_live_uq')
+      .on(t.flightNumber)
+      .where(sql`${t.active} and ${t.purpose} = 'flight'`),
+  ],
+)
+
+/** One flight item from a push, kept so the live test can show what arrived. Flight data only. */
+export const flightPush = pgTable(
+  'flight_push',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    subscriptionId: uuid('subscription_id')
+      .notNull()
+      .references(() => flightSubscription.id, { onDelete: 'cascade' }),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    number: text('number').notNull(),
+    status: text('status').notNull(),
+    fromAirport: text('from_airport'),
+    toAirport: text('to_airport'),
+    scheduledDeparture: timestamp('scheduled_departure', { withTimezone: true }),
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
+  },
+  (t) => [index('flight_push_subscription_id_idx').on(t.subscriptionId, t.receivedAt)],
 )
 
 /** What the tracker noticed changing on a flight, for the board's alerts. */
