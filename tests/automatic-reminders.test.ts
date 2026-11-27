@@ -160,6 +160,9 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
   let riley = ''
   let templateId = ''
   const start = new Date()
+  // The audit log keeps microseconds and a JS Date only milliseconds: a window
+  // ending "now" can end just before an event written in the same millisecond.
+  const soon = () => new Date(Date.now() + 1000)
 
   async function addUser(u: SessionUser, role: Role) {
     await db.insert(user).values({ id: u.id, email: u.email, name: u.name, twoFactorEnabled: true })
@@ -264,7 +267,7 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
   })
 
   it('the morning digest reports the automatic reminders, once a day', async () => {
-    const content = await loadDigest(db, new Date(start.getTime() - 1000), new Date(), 7)
+    const content = await loadDigest(db, new Date(start.getTime() - 1000), soon(), 7)
     const names = content.reminders.map((r) => r.name)
     expect(names).toContain(`Avery Auto ${tag}`)
     expect(names).toContain(`Riley Real ${tag}`)
@@ -306,14 +309,16 @@ describe.skipIf(!url)('automatic reminders against Postgres', () => {
       sentTo: 'them',
     })
     const mine = (c: Awaited<ReturnType<typeof loadDigest>>) => c.unsigned.find((u) => u.name === `Avery Auto ${tag}`)
+    await new Promise((r) => setTimeout(r, 5))
     const before = new Date()
-    expect(mine(await loadDigest(db, new Date(before.getTime() - 1), new Date(), 7))?.news).toBe(false)
+    expect(mine(await loadDigest(db, before, soon(), 7))?.news).toBe(false)
     await asCm().reminders.save({ paperworkDaysBefore: 14, contractDaysAfter: 3, digestOn: true })
-    expect(mine(await loadDigest(db, new Date(before.getTime() - 1), new Date(), 3))?.news).toBe(true)
+    expect(mine(await loadDigest(db, before, soon(), 3))?.news).toBe(true)
     // The same save again changes nothing, so it isn't news again.
+    await new Promise((r) => setTimeout(r, 5))
     const after = new Date()
     await asCm().reminders.save({ paperworkDaysBefore: 14, contractDaysAfter: 3, digestOn: true })
-    expect(mine(await loadDigest(db, after, new Date(), 3))?.news).toBe(false)
+    expect(mine(await loadDigest(db, after, soon(), 3))?.news).toBe(false)
   })
 
   it('shows what is coming up, worked out from the dates', async () => {
