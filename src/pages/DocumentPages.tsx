@@ -616,7 +616,7 @@ export function ProductionDocumentsPage() {
           {results ? <ReminderResults results={results} onClose={() => setResults(null)} /> : null}
         </div>
       ) : null}
-      <div className="table-wrap">
+      <div className="table-wrap" data-tour="documents-checklist">
         <table>
           <thead>
             <tr>

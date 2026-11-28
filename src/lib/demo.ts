@@ -1,4 +1,5 @@
 import { authClient } from './auth-client'
+import { resetTour } from './tour'
 
 /**
  * "Try the demo": asks the server for a guest session (no password, read-only,
@@ -6,7 +7,11 @@ import { authClient } from './auth-client'
  */
 export async function startGuestDemo(): Promise<string | null> {
   const res = await authClient.$fetch('/demo/guest', { method: 'POST' })
-  if (!res.error) return null
+  if (!res.error) {
+    // A new guest session gets the guided tour again.
+    resetTour()
+    return null
+  }
   if (res.error.status === 429) return 'Too many tries. Wait a minute and try again.'
   return res.error.message || 'The demo didn’t start. Try again in a moment.'
 }

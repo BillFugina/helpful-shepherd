@@ -368,7 +368,7 @@ function DemoClock({ board: b, own }: { board: Board; own: ((offsetMs: number) =
   const travelDay = b.arrivals.length || b.departures.length ? b.date : (b.nextTravelDay ?? b.firstTravelDay)
 
   return (
-    <div className="card demo-clock">
+    <div className="card demo-clock" data-tour="arrivals-clock">
       <p className="small">
         <strong>{own ? 'Your demo clock' : 'Demo clock'}:</strong> the feed thinks it's {dayAt(b.now, THEATRE_AIRPORT)},{' '}
         {timeAt(b.now, THEATRE_AIRPORT)}

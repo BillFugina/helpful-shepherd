@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, Navigate } from 'react-router'
 import { VIEWER_ROLE_LABELS } from '../../shared/access'
 import { TryDemoButton } from '../components/TryDemoButton'
+import { useTour } from '../components/GuidedTour'
+import { startTour } from '../lib/tour'
 import { useTRPC } from '../lib/trpc'
 import { useMe } from '../lib/useMe'
 
@@ -47,6 +49,7 @@ export function HomePage() {
 
 /** What a guest sees first: where to look, in the order that shows the app best. */
 function GuestTour() {
+  const touring = useTour()?.open === true
   return (
     <section>
       <h1>Welcome to the demo</h1>
@@ -56,8 +59,15 @@ function GuestTour() {
         open everything except the private fields (dates of birth, travel IDs, tax and bank documents), and nothing you
         do changes anything.
       </p>
+      {touring ? null : (
+        <div className="actions">
+          <button type="button" onClick={() => startTour(0)}>
+            Take the one-minute tour
+          </button>
+        </div>
+      )}
       <div className="card">
-        <h2>Where to start</h2>
+        <h2>Or look around on your own</h2>
         <ol className="tour">
           <li>
             <Link to="/seasons">Seasons</Link>: open the 2027 season to see every production and each person's stage,

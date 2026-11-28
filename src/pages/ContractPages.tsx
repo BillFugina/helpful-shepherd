@@ -363,7 +363,7 @@ function ContractView({ detail: d }: { detail: ContractDetail }) {
         </form>
       ) : null}
 
-      <section className="card wide">
+      <section className="card wide" data-tour="contract-fields">
         <h2>What goes on it</h2>
         <div className="table-wrap">
           <table>

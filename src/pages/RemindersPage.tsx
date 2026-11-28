@@ -62,7 +62,7 @@ export function RemindersPage() {
 
       {admin ? <DigestPreview /> : null}
 
-      <section className="card wide">
+      <section className="card wide" data-tour="reminders-coming-up">
         <h2>Coming up</h2>
         {upcoming.isPending ? <p className="muted">Loading…</p> : null}
         {upcoming.error ? <p className="error">{errorText(upcoming.error)}</p> : null}
