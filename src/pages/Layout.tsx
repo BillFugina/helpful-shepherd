@@ -87,6 +87,7 @@ export function Layout() {
                 <>
                   <NavLink to="/admin/access">Access</NavLink>
                   <NavLink to="/admin/audit">Audit log</NavLink>
+                  <NavLink to="/admin/export">Export</NavLink>
                 </>
               ) : null}
             </>

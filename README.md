@@ -322,6 +322,31 @@ A staff login with no password yet, or a forgotten one, gets a link by email: "S
 
 It goes out through the same email settings as reminders, so in allowlist mode the address must be on `EMAIL_ALLOWLIST`.
 
+## Data export
+
+**Export** (Company Manager only, with two-factor) downloads one ZIP with
+everything the theater keeps here, so it owns its data if it moves on (PRD,
+Security and privacy). Inside: `README.txt` describing every table and
+column, `data.json` with all rows, one CSV per table in `csv/` (UTF-8 with a
+BOM so Excel opens it; cells that would start a formula get a leading
+apostrophe, with the raw value in `data.json`), and the blank contract
+templates as PDFs.
+
+By default the masked groups (date of birth, home address, TSA/KTN, frequent
+flyer) and held tax and bank forms are left out entirely. Ticking **Include
+sensitive details**, and confirming a second time, adds them decrypted, with
+held forms under `forms/`. Every export writes one audit event, and a
+sensitive one also writes an event against each person whose masked details
+or forms went into the file.
+
+Passwords, sessions, two-factor secrets, connected-app tokens, upload link
+tokens, phone-alert device keys, flight-tracker subscriptions and the pasted
+text behind Claude's drafts are never exported. The guest demo, the Claude
+connector and Finance can't export. The file comes back through one Vercel
+function, so files that would push it past about 3 MB are left out and listed
+in its README, to open from the app. It's built in one read-only snapshot, on
+request, with no background job.
+
 ## Local setup
 
 ```sh

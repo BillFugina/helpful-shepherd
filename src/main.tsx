@@ -18,6 +18,7 @@ import { ConnectPage } from './pages/ConnectPage'
 import { DemoPage } from './pages/DemoPage'
 import { DocumentSettingsPage, DocumentsPage, ProductionDocumentsPage, UploadPage } from './pages/DocumentPages'
 import { DraftsPage } from './pages/DraftsPage'
+import { ExportPage } from './pages/ExportPage'
 import { EngagementPage } from './pages/EngagementPage'
 import { FastEntryPage } from './pages/FastEntryPage'
 import { HomePage } from './pages/HomePage'
@@ -76,6 +77,7 @@ const router = createBrowserRouter([
           { path: '/settings/reminders', element: <RemindersPage /> },
           { path: '/admin/access', element: <AccessPage /> },
           { path: '/admin/audit', element: <AuditPage /> },
+          { path: '/admin/export', element: <ExportPage /> },
         ],
       },
     ],

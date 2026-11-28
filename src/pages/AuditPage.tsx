@@ -86,6 +86,8 @@ export function AuditPage() {
 function describeDetail(detail: Record<string, unknown> | null): string {
   if (!detail) return ''
   if (typeof detail.field === 'string') return ` (${detail.field})`
+  if (typeof detail.includesSensitive === 'boolean')
+    return detail.includesSensitive ? ' all data, with sensitive details' : ' all data'
   if (typeof detail.tool === 'string') return ` (${detail.tool.replaceAll('_', ' ')})`
   if (typeof detail.role === 'string') return ` (${detail.role}: ${String(detail.from)} → ${String(detail.to)})`
   return ''
