@@ -11,6 +11,7 @@ import { contractsRouter } from './contracts.js'
 import { documentsRouter, uploadLinkRouter } from './documents.js'
 import { draftsRouter } from './drafts.js'
 import { engagementsRouter } from './engagements.js'
+import { exportRouter } from './export.js'
 import { housingRouter } from './housing.js'
 import { importRouter } from './import.js'
 import { passwordRouter } from './password.js'
@@ -45,6 +46,8 @@ export const appRouter = router({
   import: importRouter,
   access: accessRouter,
   audit: auditRouter,
+  /** The full data export (Company Manager only). */
+  export: exportRouter,
   drafts: draftsRouter,
   connections: connectionsRouter,
   contracts: contractsRouter,
