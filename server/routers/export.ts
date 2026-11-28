@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server'
 import { exportInput } from '../../shared/export.js'
 import { auditEvent } from '../db/schema.js'
-import { buildExport } from '../export/build.js'
+import { buildExport, ExportTooLargeError } from '../export/build.js'
 import { adminProcedure, router } from '../trpc.js'
 
 export const exportRouter = router({
@@ -21,6 +21,12 @@ export const exportRouter = router({
         exportedBy: ctx.user.email,
       })
     } catch (error) {
+      if (error instanceof ExportTooLargeError) {
+        throw new TRPCError({
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'The records are now too large for one download. Ask for the export to be split.',
+        })
+      }
       console.error('export failed', error)
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'The export could not be built. Try again.' })
     }
@@ -39,6 +45,7 @@ export const exportRouter = router({
           tables: Object.fromEntries(summary.tables.map((t) => [t.name, t.rows])),
           files: summary.files,
           skippedFiles: summary.skippedFiles.length,
+          auditRowsLeftOut: summary.auditRowsLeftOut,
         },
       })
       if (sensitiveReads.length) {

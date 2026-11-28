@@ -87,6 +87,15 @@ export function ExportPage() {
               fit in one download. The README lists them; open each from the app.
             </p>
           ) : null}
+          {!last.dataJson ? (
+            <p className="warning">data.json was left out to fit one download. The CSVs hold every row.</p>
+          ) : null}
+          {last.auditRowsLeftOut ? (
+            <p className="warning">
+              The {last.auditRowsLeftOut} oldest audit log entries were left out to fit one download. They are still in
+              the Audit log page.
+            </p>
+          ) : null}
         </div>
       ) : null}
     </section>

@@ -343,8 +343,10 @@ Passwords, sessions, two-factor secrets, connected-app tokens, upload link
 tokens, phone-alert device keys, flight-tracker subscriptions and the pasted
 text behind Claude's drafts are never exported. The guest demo, the Claude
 connector and Finance can't export. The file comes back through one Vercel
-function, so files that would push it past about 3 MB are left out and listed
-in its README, to open from the app. It's built in one read-only snapshot, on
+function, so it stays under about 3 MB: tables come first, files that don't
+fit are left out and listed in its README (to open from the app), and if the
+records alone outgrow that, data.json goes and then the oldest audit log
+entries, each noted in the README. It's built in one read-only snapshot, on
 request, with no background job.
 
 ## Local setup

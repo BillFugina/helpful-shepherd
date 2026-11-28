@@ -47,8 +47,9 @@ export type ExportTableName = (typeof EXPORT_TABLES)[number]['name']
 
 /**
  * The export comes back through a Vercel function, which sends at most 4.5 MB,
- * and base64 adds a third. Files that would push the ZIP past this are left
- * out and listed in its README, to be opened from the app instead.
+ * and base64 adds a third. Tables come first; files that would push the ZIP
+ * past this are left out and listed in its README, to be opened from the app
+ * instead. Past that, data.json goes, then the oldest audit log entries.
  */
 export const MAX_EXPORT_BYTES = 3_200_000
 
@@ -59,4 +60,8 @@ export interface ExportSummary {
   tables: { name: ExportTableName; rows: number }[]
   files: number
   skippedFiles: { path: string; bytes: number }[]
+  /** False when data.json was left out to fit; the CSVs still hold every row. */
+  dataJson: boolean
+  /** Oldest audit log entries left out to fit, if the records alone ran past the limit. */
+  auditRowsLeftOut: number
 }

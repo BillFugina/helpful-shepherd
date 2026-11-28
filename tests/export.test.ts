@@ -18,7 +18,7 @@ import {
 } from '../server/db/schema.js'
 import { encryptFile, FILE_NAME_AAD } from '../server/documents/service.js'
 import { csvCell, toCsv } from '../server/export/csv.js'
-import { EXPORT_FIELDS, exportColumns, slug } from '../server/export/build.js'
+import { buildExport, EXPORT_FIELDS, exportColumns, slug } from '../server/export/build.js'
 import { prepareEntry, writeZip } from '../server/export/zip.js'
 import { appRouter } from '../server/routers/index.js'
 import { ensureDefaultGrants } from '../server/seed.js'
@@ -347,6 +347,72 @@ describe.skipIf(!url)('export against Postgres', () => {
       ['travel_id', 'person'],
     ])
     expect(JSON.stringify(events)).not.toContain('1991-04-05')
+  })
+
+  const cmOpts = (includeSensitive: boolean, maxBytes?: number) => ({
+    grants: DEFAULT_GRANTS.company_manager,
+    isAdmin: true,
+    includeSensitive,
+    exportedBy: cm.email,
+    maxBytes,
+  })
+
+  it('a form too large to include leaves out its file name and isn’t logged as read', async () => {
+    // Random bytes don't compress, so this form can't fit a 200 KB export.
+    const big = Buffer.from(Array.from({ length: 260_000 }, () => Math.floor(Math.random() * 256)))
+    const [d] = await db
+      .insert(document)
+      .values({ engagementId, documentType: 'i9', status: 'received', receivedOn: '2032-01-11' })
+      .returning({ id: document.id })
+    await db.insert(documentFile).values({
+      documentId: d!.id,
+      data: encryptFile(big, d!.id),
+      fileNameEnc: encryptField('passport scan.pdf', FILE_NAME_AAD, fieldKey()),
+      mime: 'application/pdf',
+      bytes: big.length,
+    })
+    try {
+      const { zip, summary, sensitiveReads } = await buildExport(db, cmOpts(true, 200_000))
+      const files = readZip(zip)
+      const row = parseCsv(files.get('csv/documents.csv')!.toString('utf8')).find((r) => r.id === d!.id)!
+      expect(row.fileHeld).toBe('true')
+      expect(row.fileName).toBe('')
+      expect(row.fileInExport).toBe('')
+      expect(summary.skippedFiles.map((f) => f.path)).toContainEqual(expect.stringContaining('/I-9.'))
+      expect(sensitiveReads.some((r) => r.recordId === d!.id)).toBe(false)
+      expect([...files.values()].some((b) => b.toString('latin1').includes('passport scan'))).toBe(false)
+      expect(files.get('README.txt')!.toString('utf8')).toContain('Files too large for one download')
+    } finally {
+      await db.delete(document).where(eq(document.id, d!.id))
+    }
+  })
+
+  it('when the records outgrow one download, drops data.json and then the oldest audit entries', async () => {
+    const marker = `export-size-${tag}`
+    await db.insert(auditEvent).values(
+      Array.from({ length: 3000 }, (_, i) => ({
+        actorId: cm.id,
+        action: 'read' as const,
+        recordType: 'test',
+        recordId: `${marker}-${i}-${randomUUID()}`,
+      })),
+    )
+    const { zip, summary } = await buildExport(db, cmOpts(false, 200_000))
+    expect(zip.length).toBeLessThanOrEqual(200_000)
+    expect(summary.dataJson).toBe(false)
+    expect(summary.auditRowsLeftOut).toBeGreaterThan(0)
+    const files = readZip(zip)
+    expect(files.has('data.json')).toBe(false)
+    const audit = parseCsv(files.get('csv/audit_log.csv')!.toString('utf8'))
+    // The newest entry is kept; the oldest ones go.
+    // (Other test files may add entries meanwhile, so look for ours by marker.)
+    expect(audit.some((r) => r.recordId?.startsWith(`${marker}-2999-`))).toBe(true)
+    expect(audit.some((r) => r.recordId?.startsWith(`${marker}-0-`))).toBe(false)
+    const readmeText = files.get('README.txt')!.toString('utf8')
+    expect(readmeText).toContain(`The ${summary.auditRowsLeftOut} oldest audit log entries were left out`)
+    expect(readmeText).toContain('data.json was left out')
+    // Every other table is whole.
+    expect(files.has('csv/people.csv')).toBe(true)
   })
 
   it('includes blank contract templates as PDFs', async () => {

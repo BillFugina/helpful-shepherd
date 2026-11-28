@@ -89,6 +89,8 @@ export interface ExportOptions {
   includeSensitive: boolean
   exportedBy: string
   now?: Date
+  /** The largest ZIP to build. Defaults to what one Vercel response can carry; tests lower it. */
+  maxBytes?: number
 }
 
 /** What the export put in the file that the audit log should hear about, per person. */
@@ -104,6 +106,13 @@ export interface ExportResult {
   zip: Buffer
   summary: ExportSummary
   sensitiveReads: SensitiveRead[]
+}
+
+/** The records alone are more than one download can carry. */
+export class ExportTooLargeError extends Error {
+  constructor(readonly bytes: number) {
+    super(`The export came to ${bytes} bytes, more than one download can carry.`)
+  }
 }
 
 interface Table {
@@ -374,7 +383,6 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
     const row: Row = { ...d, fileHeld: file !== null, fileName: null, fileInExport: null }
     const eng = engagementById.get(d.engagementId)
     if (file && wantSensitive('tax_bank') && eng) {
-      row.fileName = decryptField(file.fileNameEnc, FILE_NAME_AAD, key)
       const who = personById.get(eng.personId)?.legalName ?? 'person'
       const show = productionById.get(eng.productionId)?.title ?? 'production'
       const ext = EXTENSIONS[file.mime as FileMime] ?? 'bin'
@@ -384,6 +392,8 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
         path,
         data: decryptFile(file.data, d.id),
         onIncluded: () => {
+          // The file name is tax_bank too: only read it for a form that goes out, and log it with the form.
+          row.fileName = decryptField(file.fileNameEnc, FILE_NAME_AAD, key)
           row.fileInExport = path
           sensitiveReads.push({
             personId,
@@ -434,22 +444,11 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
     audit_log: raw.audit,
   }
 
-  // Files go in first so their paths are set before the tables are written.
-  // Forms before blank templates: the theater has the templates elsewhere.
-  const fileEntries = []
-  const skippedFiles: ExportSummary['skippedFiles'] = []
-  // The tables, README and data.json are small next to files, but leave them room.
-  let used = ZIP_OVERHEAD + 256 * 1024
-  for (const b of binaries) {
-    const entry = prepareEntry({ name: b.path, data: b.data })
-    if (used + entrySize(entry) > MAX_EXPORT_BYTES) {
-      skippedFiles.push({ path: b.path, bytes: b.data.length })
-      continue
-    }
-    used += entrySize(entry)
-    fileEntries.push(entry)
-    b.onIncluded()
-  }
+  // Tables come first: they are the theater's records. Files fill what's left,
+  // since each can still be opened from the app. README gets a fixed reserve.
+  const maxBytes = opts.maxBytes ?? MAX_EXPORT_BYTES
+  const README_RESERVE = Math.min(128 * 1024, Math.floor(maxBytes / 4))
+  const budget = maxBytes - ZIP_OVERHEAD - README_RESERVE
 
   const tables: Table[] = []
   const columnsByTable = new Map<ExportTableName, string[]>()
@@ -460,16 +459,35 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
     columnsByTable.set(name, columns)
     tables.push({ name, fields, rows: sources[name].map((r) => project(r, columns)) })
   }
+  const csvEntry = (t: Table, rows = t.rows) =>
+    prepareEntry({
+      name: `csv/${t.name}.csv`,
+      data: Buffer.from('\uFEFF' + toCsv(columnsByTable.get(t.name)!, rows), 'utf8'),
+    })
+  const csvEntries = new Map(tables.map((t) => [t.name, csvEntry(t)]))
+  const csvBytes = () => [...csvEntries.values()].reduce((n, e) => n + entrySize(e), 0)
 
-  const today = theatreToday(now)
-  const fileName = `theatre-raleigh-export-${today}${opts.includeSensitive ? '-sensitive' : ''}.zip`
-  const summaryBase = {
-    fileName,
-    includesSensitive: opts.includeSensitive,
-    tables: tables.map((t) => ({ name: t.name, rows: t.rows.length })),
-    files: fileEntries.length,
-    skippedFiles,
+  // If the CSVs alone don't fit, the audit log, the one table that only grows,
+  // keeps its newest rows and the README says how many older ones were left out.
+  let auditRowsLeftOut = 0
+  const audit = tables.find((t) => t.name === 'audit_log')
+  if (csvBytes() > budget && audit) {
+    const others = csvBytes() - entrySize(csvEntries.get('audit_log')!)
+    if (others > budget) throw new ExportTooLargeError(others)
+    let lo = 0
+    let hi = audit.rows.length // rows to drop, oldest first
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (others + entrySize(csvEntry(audit, audit.rows.slice(mid))) <= budget) hi = mid
+      else lo = mid + 1
+    }
+    auditRowsLeftOut = lo
+    audit.rows = audit.rows.slice(lo)
+    csvEntries.set('audit_log', csvEntry(audit))
+  } else if (csvBytes() > budget) {
+    throw new ExportTooLargeError(csvBytes())
   }
+  let used = csvBytes()
 
   const data = {
     format: 'theatre-raleigh-company-management-export',
@@ -479,25 +497,64 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
     includesSensitive: opts.includeSensitive,
     tables: Object.fromEntries(tables.map((t) => [t.name, t.rows])),
   }
+  // data.json repeats the CSVs, so it is the first thing to go when space runs short.
+  let dataEntry: ReturnType<typeof prepareEntry> | null = auditRowsLeftOut
+    ? null
+    : prepareEntry({ name: 'data.json', data: Buffer.from(JSON.stringify(data, null, 2), 'utf8') })
+  if (dataEntry && used + entrySize(dataEntry) > budget) dataEntry = null
+  if (dataEntry) used += entrySize(dataEntry)
+
+  const fileEntries: ReturnType<typeof prepareEntry>[] = []
+  const skippedFiles: ExportSummary['skippedFiles'] = []
+  for (const b of binaries) {
+    const entry = prepareEntry({ name: b.path, data: b.data })
+    if (used + entrySize(entry) > budget) {
+      skippedFiles.push({ path: b.path, bytes: b.data.length })
+      continue
+    }
+    used += entrySize(entry)
+    fileEntries.push(entry)
+    b.onIncluded()
+  }
+  // Form and template rows only now know whether their file went out; rebuild
+  // them so fileName, fileInExport and pdfInExport match. They grow by a few
+  // cells at most, which the README reserve covers.
+  let dataChanged = false
+  for (const name of ['documents', 'contract_templates'] as const) {
+    const t = tables.find((x) => x.name === name)
+    if (!t) continue
+    t.rows = sources[name].map((r) => project(r, columnsByTable.get(name)!))
+    csvEntries.set(name, csvEntry(t))
+    data.tables[name] = t.rows
+    dataChanged = true
+  }
+  if (dataEntry && dataChanged) {
+    dataEntry = prepareEntry({ name: 'data.json', data: Buffer.from(JSON.stringify(data, null, 2), 'utf8') })
+  }
+
+  const today = theatreToday(now)
+  const fileName = `theatre-raleigh-export-${today}${opts.includeSensitive ? '-sensitive' : ''}.zip`
+  const summaryBase = {
+    fileName,
+    includesSensitive: opts.includeSensitive,
+    tables: tables.map((t) => ({ name: t.name, rows: t.rows.length })),
+    files: fileEntries.length,
+    skippedFiles,
+    dataJson: dataEntry !== null,
+    auditRowsLeftOut,
+  }
 
   const textEntries = [
     prepareEntry({
       name: 'README.txt',
       data: Buffer.from(readme({ ...summaryBase, exportedBy: opts.exportedBy, now, columnsByTable }), 'utf8'),
     }),
-    prepareEntry({ name: 'data.json', data: Buffer.from(JSON.stringify(data, null, 2), 'utf8') }),
-    ...tables.map((t) =>
-      prepareEntry({
-        name: `csv/${t.name}.csv`,
-        data: Buffer.from('\uFEFF' + toCsv(columnsByTable.get(t.name)!, t.rows), 'utf8'),
-      }),
-    ),
+    ...(dataEntry ? [dataEntry] : []),
+    ...tables.map((t) => csvEntries.get(t.name)!),
   ]
 
   const zip = writeZip([...textEntries, ...fileEntries], now)
-  if (zip.length > MAX_EXPORT_BYTES + 256 * 1024) {
-    throw new Error(`The export came to ${zip.length} bytes, more than one download can carry.`)
-  }
+  if (zip.length > maxBytes) throw new ExportTooLargeError(zip.length)
   return { zip, summary: { ...summaryBase, bytes: zip.length }, sensitiveReads }
 }
 
@@ -509,6 +566,8 @@ function readme(s: {
   tables: { name: ExportTableName; rows: number }[]
   files: number
   skippedFiles: { path: string; bytes: number }[]
+  dataJson: boolean
+  auditRowsLeftOut: number
   columnsByTable: Map<ExportTableName, string[]>
 }): string {
   const label = (name: ExportTableName) => EXPORT_TABLES.find((t) => t.name === name)?.label ?? name
@@ -522,7 +581,9 @@ function readme(s: {
     '',
     "What's inside",
     '- csv/: one spreadsheet per table, UTF-8. Opens in Excel, Numbers or Google Sheets.',
-    '- data.json: the same rows, for loading into another system. Values are exactly as stored.',
+    ...(s.dataJson
+      ? ['- data.json: the same rows, for loading into another system. Values are exactly as stored.']
+      : []),
     '- templates/: blank contract forms uploaded to the app.',
     ...(s.includesSensitive
       ? ['- forms/: tax and bank forms the app still held, one folder per person and production.']
@@ -542,6 +603,18 @@ function readme(s: {
     '- Passwords, sign-in sessions, two-factor keys, connected-app tokens, upload link tokens, phone alert device keys and the flight feed’s subscriptions. They are how the app runs, not the theater’s records, and some would let whoever holds them in.',
     '- The pasted email behind each Claude draft. The draft’s proposal is in drafts.csv.',
   ]
+  if (!s.dataJson || s.auditRowsLeftOut) {
+    lines.push(
+      '',
+      'Shortened to fit one download',
+      ...(s.dataJson ? [] : ['- data.json was left out. The CSVs hold every row it would have.']),
+      ...(s.auditRowsLeftOut
+        ? [
+            `- The ${s.auditRowsLeftOut} oldest audit log entries were left out; audit_log.csv starts at the oldest entry that fit. They are still in the app.`,
+          ]
+        : []),
+    )
+  }
   if (s.skippedFiles.length) {
     lines.push(
       '',
