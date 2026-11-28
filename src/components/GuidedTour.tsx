@@ -133,6 +133,8 @@ async function pathFor(step: TourStep, queryClient: QueryClient, trpc: Trpc): Pr
 
 /** The Housing page shows four weeks at a time, from ?from= (default today). */
 const HOUSING_DAYS = 28
+/** Before any stay could be on record: asking for stays from here finds the first one. */
+const EARLIEST = '2000-01-01'
 
 async function placePath(place: TourPlace, queryClient: QueryClient, trpc: Trpc): Promise<string | null> {
   if (place === 'season') {
@@ -140,12 +142,17 @@ async function placePath(place: TourPlace, queryClient: QueryClient, trpc: Trpc)
     return seasons[0] ? `/seasons/${seasons[0].id}` : null
   }
   if (place === 'housing') {
-    // The demo season is ahead of today: find the first four weeks with a warning to show, or with anyone housed.
+    // The demo season isn't now (it's ahead of today, or later behind it): if
+    // these four weeks show no warning, start at the earliest stay on record
+    // and find the first four weeks with a warning, or at least with anyone housed.
     const now = await queryClient.fetchQuery(
       trpc.housing.occupancy.queryOptions({ from: localDate(new Date(), THEATRE_TZ), days: HOUSING_DAYS }),
     )
     if (now.warnings.length) return '/housing'
-    const first = now.nextStayFrom
+    const ever = await queryClient.fetchQuery(
+      trpc.housing.occupancy.queryOptions({ from: EARLIEST, days: HOUSING_DAYS }),
+    )
+    const first = ever.nextStayFrom
     if (!first) return null
     for (let i = 0, from = first; i < 13; i++, from = addDays(from, HOUSING_DAYS)) {
       const window = await queryClient.fetchQuery(trpc.housing.occupancy.queryOptions({ from, days: HOUSING_DAYS }))
