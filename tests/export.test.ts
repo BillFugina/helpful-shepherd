@@ -390,7 +390,10 @@ describe.skipIf(!url)('export against Postgres', () => {
   it('when the records outgrow one download, drops data.json and then the oldest audit entries', async () => {
     const marker = `export-size-${tag}`
     await db.insert(auditEvent).values(
+      // Dated long ago and one second apart, so these are the oldest entries in
+      // the log and their order is known, whatever else the database holds.
       Array.from({ length: 3000 }, (_, i) => ({
+        at: new Date(Date.UTC(2000, 0, 1) + i * 1000),
         actorId: cm.id,
         action: 'read' as const,
         recordType: 'test',
@@ -404,10 +407,13 @@ describe.skipIf(!url)('export against Postgres', () => {
     const files = readZip(zip)
     expect(files.has('data.json')).toBe(false)
     const audit = parseCsv(files.get('csv/audit_log.csv')!.toString('utf8'))
-    // The newest entry is kept; the oldest ones go.
-    // (Other test files may add entries meanwhile, so look for ours by marker.)
-    expect(audit.some((r) => r.recordId?.startsWith(`${marker}-2999-`))).toBe(true)
-    expect(audit.some((r) => r.recordId?.startsWith(`${marker}-0-`))).toBe(false)
+    // The oldest entries go first: whatever of ours is kept is the newest run of them.
+    const kept = audit
+      .map((r) => r.recordId?.match(new RegExp(`^${marker}-(\\d+)-`))?.[1])
+      .filter((n): n is string => n !== undefined)
+      .map(Number)
+    expect(kept).not.toContain(0)
+    if (kept.length) expect(kept).toEqual(Array.from({ length: kept.length }, (_, i) => 3000 - kept.length + i))
     const readmeText = files.get('README.txt')!.toString('utf8')
     expect(readmeText).toContain(`The ${summary.auditRowsLeftOut} oldest audit log entries were left out`)
     expect(readmeText).toContain('data.json was left out')
