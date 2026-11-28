@@ -1,7 +1,14 @@
 /** The guided tour's state in this browser tab, shared by the panel and the buttons that start it. */
 import { clampStep, parseTourState, type TourState } from '../../shared/tour'
 
-export { pickShowcaseContract, TOUR_STEPS, tourStep, type TourPlace, type TourStep } from '../../shared/tour'
+export {
+  pickDocumentsProduction,
+  pickShowcaseContract,
+  TOUR_STEPS,
+  tourStep,
+  type TourPlace,
+  type TourStep,
+} from '../../shared/tour'
 
 const STATE_KEY = 'guest-demo-tour'
 

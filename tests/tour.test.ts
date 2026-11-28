@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { clampStep, parseTourState, pickShowcaseContract, TOUR_STEPS, tourStep } from '../shared/tour.js'
+import {
+  clampStep,
+  parseTourState,
+  pickDocumentsProduction,
+  pickShowcaseContract,
+  TOUR_STEPS,
+  tourStep,
+} from '../shared/tour.js'
 
 describe('guided tour', () => {
   it('has a handful of short stops with unique ids', () => {
@@ -48,5 +55,33 @@ describe('guided tour', () => {
       'text',
     )
     expect(pickShowcaseContract([{ contracts: [] }])).toBeNull()
+  })
+
+  it('prefers a draft among contracts of the same kind', () => {
+    const c = (id: string, format: string, status: string) => ({ id, status, template: { format } })
+    expect(
+      pickShowcaseContract([
+        { contracts: [c('signed', 'equity_itc_form', 'signed'), c('sdc-draft', 'sdc_form', 'draft')] },
+        { contracts: [c('draft', 'equity_itc_form', 'draft')] },
+      ]),
+    ).toBe('draft')
+  })
+
+  it('shows the paperwork of a production that is part done', () => {
+    expect(
+      pickDocumentsProduction([
+        { id: 'done', open: 0, total: 5 },
+        { id: 'none', open: 5, total: 5 },
+        { id: 'mixed', open: 2, total: 5 },
+      ]),
+    ).toBe('mixed')
+    expect(
+      pickDocumentsProduction([
+        { id: 'done', open: 0, total: 5 },
+        { id: 'none', open: 5, total: 5 },
+      ]),
+    ).toBe('none')
+    expect(pickDocumentsProduction([{ id: 'done', open: 0, total: 5 }])).toBe('done')
+    expect(pickDocumentsProduction([])).toBeNull()
   })
 })

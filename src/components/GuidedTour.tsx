@@ -5,6 +5,7 @@ import {
   closeTour,
   getTour,
   goToTourStep,
+  pickDocumentsProduction,
   pickShowcaseContract,
   startTour,
   subscribeTour,
@@ -14,6 +15,8 @@ import {
   type TourStep,
 } from '../lib/tour'
 import { useTRPC } from '../lib/trpc'
+import { THEATRE_TZ } from '../lib/travel'
+import { addDays, localDate } from '../../shared/time'
 
 type Trpc = ReturnType<typeof useTRPC>
 
@@ -69,7 +72,7 @@ function TourPanel({ step }: { step: number }) {
   useEffect(() => {
     let cancelled = false
     void pathFor(s, queryClient, trpc).then((path) => {
-      if (!cancelled && path && path !== window.location.pathname) void navigate(path)
+      if (!cancelled && path && path !== window.location.pathname + window.location.search) void navigate(path)
     })
     return () => {
       cancelled = true
@@ -128,26 +131,45 @@ async function pathFor(step: TourStep, queryClient: QueryClient, trpc: Trpc): Pr
   }
 }
 
+/** The Housing page shows four weeks at a time, from ?from= (default today). */
+const HOUSING_DAYS = 28
+
 async function placePath(place: TourPlace, queryClient: QueryClient, trpc: Trpc): Promise<string | null> {
   if (place === 'season') {
     const seasons = await queryClient.fetchQuery(trpc.seasons.list.queryOptions())
     return seasons[0] ? `/seasons/${seasons[0].id}` : null
   }
-  const productions = await queryClient.fetchQuery(trpc.productions.list.queryOptions())
-  if (place === 'documents') return productions[0] ? `/productions/${productions[0].id}/documents` : null
-  // A filled Equity contract shows the most; settle for any contract if there's none.
-  let fallback: string | null = null
-  for (const p of productions) {
-    const data = await queryClient.fetchQuery(trpc.contracts.byProduction.queryOptions({ productionId: p.id }))
-    const id = pickShowcaseContract(data.engagements)
-    if (!id) continue
-    const equity = data.engagements.some((e) =>
-      e.contracts.some((c) => c.id === id && c.template.format === 'equity_itc_form'),
+  if (place === 'housing') {
+    // The demo season is ahead of today: find the first four weeks with a warning to show, or with anyone housed.
+    const now = await queryClient.fetchQuery(
+      trpc.housing.occupancy.queryOptions({ from: localDate(new Date(), THEATRE_TZ), days: HOUSING_DAYS }),
     )
-    if (equity) return `/contracts/${id}`
-    fallback ??= `/contracts/${id}`
+    if (now.warnings.length) return '/housing'
+    const first = now.nextStayFrom
+    if (!first) return null
+    for (let i = 0, from = first; i < 13; i++, from = addDays(from, HOUSING_DAYS)) {
+      const window = await queryClient.fetchQuery(trpc.housing.occupancy.queryOptions({ from, days: HOUSING_DAYS }))
+      if (window.warnings.length) return `/housing?from=${from}`
+      if (!window.nextStayFrom) break
+    }
+    return `/housing?from=${first}`
   }
-  return fallback
+  const productions = await queryClient.fetchQuery(trpc.productions.list.queryOptions())
+  if (place === 'documents') {
+    const rows = await Promise.all(
+      productions.map(async (p) => {
+        const d = await queryClient.fetchQuery(trpc.documents.overview.queryOptions({ productionId: p.id }))
+        return { id: p.id, open: d.engagements.filter((e) => !e.summary.complete).length, total: d.engagements.length }
+      }),
+    )
+    const id = pickDocumentsProduction(rows)
+    return id ? `/productions/${id}/documents` : null
+  }
+  const all = await Promise.all(
+    productions.map((p) => queryClient.fetchQuery(trpc.contracts.byProduction.queryOptions({ productionId: p.id }))),
+  )
+  const id = pickShowcaseContract(all.flatMap((d) => d.engagements))
+  return id ? `/contracts/${id}` : null
 }
 
 /**

@@ -8,7 +8,7 @@
  * `path` if it can't.
  */
 
-export type TourPlace = 'season' | 'contract' | 'documents'
+export type TourPlace = 'season' | 'housing' | 'contract' | 'documents'
 
 export type TourStep = {
   id: string
@@ -47,8 +47,9 @@ export const TOUR_STEPS: readonly TourStep[] = [
   {
     id: 'housing',
     title: 'Who sleeps where',
-    body: 'Every place and every stay on one timeline, with a warning when a room breaks someone’s housing needs or a flight lands before their stay starts.',
+    body: 'Every place and every stay on one timeline, with a warning when a room breaks someone’s housing needs or someone’s flights don’t fit their stay.',
     path: '/housing',
+    place: 'housing',
     target: 'housing-check',
   },
   {
@@ -119,14 +120,25 @@ export function clampStep(step: number): number {
 
 type ContractRow = { id: string; status?: string | null; template: { format: string } }
 
+const FORMAT_RANK: Record<string, number> = { equity_itc_form: 0, sdc_form: 1 }
+const STATUS_RANK: Record<string, number> = { draft: 0, sent: 1, signed: 2 }
+
 /**
  * The contract that shows the app best: an Equity one (the locked PDF form)
- * if there is one, then an SDC one, then any. Void contracts are skipped.
+ * if there is one, then an SDC one, then any; a draft before a sent or signed
+ * one, since a draft shows the blank-field check. Void contracts are skipped.
  */
 export function pickShowcaseContract(engagements: { contracts: ContractRow[] }[]): string | null {
+  const rank = (c: ContractRow) => (FORMAT_RANK[c.template.format] ?? 2) * 10 + (STATUS_RANK[c.status ?? 'draft'] ?? 3)
   const all = engagements.flatMap((e) => e.contracts).filter((c) => c.status !== 'void')
-  const rank = (c: ContractRow) =>
-    c.template.format === 'equity_itc_form' ? 0 : c.template.format === 'sdc_form' ? 1 : 2
-  const best = [...all].sort((a, b) => rank(a) - rank(b))[0]
-  return best?.id ?? null
+  return [...all].sort((a, b) => rank(a) - rank(b))[0]?.id ?? null
+}
+
+/**
+ * The production whose paperwork checklist shows the most: some people done
+ * and some still collecting, then any with forms still open, then the first.
+ */
+export function pickDocumentsProduction(rows: { id: string; open: number; total: number }[]): string | null {
+  const mixed = rows.find((r) => r.open > 0 && r.open < r.total)
+  return (mixed ?? rows.find((r) => r.open > 0) ?? rows[0])?.id ?? null
 }
