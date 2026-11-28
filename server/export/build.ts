@@ -530,6 +530,9 @@ export async function buildExport(db: Db, opts: ExportOptions): Promise<ExportRe
   }
   if (dataEntry && dataChanged) {
     dataEntry = prepareEntry({ name: 'data.json', data: Buffer.from(JSON.stringify(data, null, 2), 'utf8') })
+    // Those cells can tip data.json over; it's the one entry that can go.
+    const filesBytes = fileEntries.reduce((n, e) => n + entrySize(e), 0)
+    if (csvBytes() + filesBytes + entrySize(dataEntry) > budget) dataEntry = null
   }
 
   const today = theatreToday(now)
