@@ -66,7 +66,7 @@ function ProductionCard({ seasonId, production: p }: { seasonId: string; product
   const showAgent = p.engagements.some((e) => e.agentName !== undefined)
 
   return (
-    <article className="production">
+    <article className="production" data-tour="season-production">
       <header className="title-row">
         <div>
           <h2>{p.title}</h2>

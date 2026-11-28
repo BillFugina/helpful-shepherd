@@ -143,7 +143,7 @@ function Warnings({ occupancy }: { occupancy: Occupancy }) {
   if (!occupancy.warnings.length) return null
   const engagementOf = new Map(occupancy.stays.map((s) => [s.assignmentId, s.engagementId]))
   return (
-    <div className="card wide">
+    <div className="card wide" data-tour="housing-check">
       <h2>Check these</h2>
       <ul className="plain">
         {occupancy.warnings.map((w) => (

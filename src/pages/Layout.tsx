@@ -1,9 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
+import { GuidedTour, useTour } from '../components/GuidedTour'
 import { ADMIN_ROLE, levelAtLeast, levelFor, VIEWER_ROLE_LABELS } from '../../shared/access'
 import { authClient } from '../lib/auth-client'
 import { currentSubscription, saveEndpoint, savedEndpoint, toInput } from '../lib/push'
+import { resetTour, startTour } from '../lib/tour'
 import { useTRPC } from '../lib/trpc'
 import { useMe } from '../lib/useMe'
 
@@ -19,6 +21,7 @@ export function Layout() {
   const { mutateAsync: refreshPush } = useMutation(trpc.push.refresh.mutationOptions())
   const { mutateAsync: unsubscribePush } = useMutation(trpc.push.unsubscribe.mutationOptions())
   const canGetAlerts = !guest && me.data?.role === ADMIN_ROLE && me.data.twoFactorEnabled === true
+  const touring = useTour()?.open === true
 
   // Keeps phone alerts working if the browser changed this device's keys or
   // address. Only updates a device this login already turned on.
@@ -53,6 +56,7 @@ export function Layout() {
     }
     await authClient.signOut()
     if (guest) {
+      resetTour()
       // Back to the home page, then refetch it: a guest may already be on it,
       // and clear() alone would leave its `me` showing the guest.
       await navigate('/')
@@ -120,6 +124,14 @@ export function Layout() {
         <div className="demo-banner guest">
           <strong>Guest demo, read-only.</strong> Every person, flight and contract here is made up. Look around freely;
           nothing you do changes anything. <Link to="/">Where to start</Link>
+          {touring ? null : (
+            <>
+              {' · '}
+              <button type="button" className="link" onClick={() => startTour(0)}>
+                Take the tour
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="demo-banner">Demo with made-up people. Don't enter real personal information.</div>
@@ -127,6 +139,7 @@ export function Layout() {
       <main>
         <Outlet />
       </main>
+      {guest ? <GuidedTour /> : null}
     </div>
   )
 }

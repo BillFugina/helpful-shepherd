@@ -282,6 +282,13 @@ guest.
   and no admin screens.
 - **Own demo clock.** Each guest moves time on the Arrivals board without
   changing it for anyone else; their board replays the simulated feed in memory.
+- **Guided tour.** A one-minute walkthrough opens the first time a guest lands
+  in a tab: eight stops (season, arrivals, housing, a filled Equity contract,
+  paperwork, reminders, and what's behind the staff login), each pointing at the
+  part of the page it describes. It's a small panel, not a modal: Back, Next,
+  Skip, the close button or Esc, and **Take the tour** in the banner reopens it.
+  Steps live in `shared/tour.ts`, targets are `data-tour` attributes, and staff
+  logins never see it.
 - **Free-tier guardrails:** 5 starts a minute per visitor, at most 1000 live
   guest sessions, expired ones cleaned up, and guest sign-ins kept out of the
   audit log. Set `DEMO_GUEST=off` to turn it off.
